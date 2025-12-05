@@ -1,11 +1,13 @@
 import React, { useEffect, useState } from 'react';
-import { FileText, Shield, Activity, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
+import { FileText, Shield, Activity, CheckCircle, AlertCircle, Loader2, ArrowLeft } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 
 const Results = ({ recordId }) => {
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
+    const navigate = useNavigate();
 
     useEffect(() => {
         if (!recordId) return;
@@ -51,10 +53,10 @@ const Results = ({ recordId }) => {
             <div className="card">
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.5rem', borderBottom: '1px solid var(--border)', paddingBottom: '1rem' }}>
                     <Shield className="text-primary" size={24} color="var(--primary)" />
-                    <h3 style={{ margin: 0 }}>Redacted Transcript</h3>
+                    <h3 style={{ margin: 0 }}>Full Transcript</h3>
                 </div>
                 <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.6, color: 'var(--text-main)', maxHeight: '500px', overflowY: 'auto' }}>
-                    {data.redacted_transcript}
+                    {data.full_transcript}
                 </div>
             </div>
 

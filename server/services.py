@@ -19,6 +19,8 @@ whisper_model = WhisperModel("large-v3", device="cpu", compute_type="int8")
 
 # Pyannote Pipeline
 try:
+    from pyannote.audio.core.task import Specifications, Problem, Resolution
+    torch.serialization.add_safe_globals([torch.torch_version.TorchVersion, Specifications, Problem, Resolution])
     diarization_pipeline = Pipeline.from_pretrained(
         "pyannote/speaker-diarization-3.1",
         use_auth_token=HF_TOKEN
@@ -41,7 +43,8 @@ async def transcribe_audio(file_path: str):
             transcript_segments.append({
                 "start": segment.start,
                 "end": segment.end,
-                "text": segment.text
+                "text": segment.text,
+                "avg_logprob": segment.avg_logprob
             })
             full_text += segment.text + " "
 
@@ -88,7 +91,28 @@ async def transcribe_audio(file_path: str):
                 "end": seg_end
             })
 
-        return json.dumps(final_transcript, indent=2)
+        # Calculate Metadata
+        duration = transcript_segments[-1]['end'] if transcript_segments else 0.0
+        word_count = len(full_text.split())
+        
+        # Calculate Average Confidence
+        total_confidence = sum([s.avg_logprob for s in segments]) # This is logprob, need to convert or just use as score. 
+        # Actually faster-whisper segment has 'avg_logprob'. Probability is exp(avg_logprob).
+        # Let's approximate confidence.
+        avg_confidence = 0.0
+        if transcript_segments:
+            import math
+            avg_confidence = sum([math.exp(s['avg_logprob']) for s in transcript_segments]) / len(transcript_segments)
+
+        speaker_count = len(set([s['speaker'] for s in final_transcript]))
+
+        return {
+            "json": json.dumps(final_transcript, indent=2),
+            "duration": duration,
+            "word_count": word_count,
+            "confidence": avg_confidence,
+            "speaker_count": speaker_count
+        }
 
     except Exception as e:
         print(f"Transcription Error: {e}")
@@ -129,9 +153,46 @@ def process_transcript_with_ai(transcript_json: str):
         ])
         soap_summary = soap_response['message']['content']
 
-        return redacted_transcript, soap_summary
+        # 3. Generate Title
+        title_prompt = f"""
+        You are a medical scribe. Generate a very short, descriptive title (3-5 words) for this session based on the transcript. 
+        Examples: "Cardiology Follow-up", "Pediatric Flu Checkup", "Diabetes Management Consultation".
+        Do not use quotes or prefixes. Just the title.
+        
+        Transcript:
+        {full_text}
+        """
+        title_response = ollama.chat(model='llama3', messages=[
+            {'role': 'user', 'content': title_prompt},
+        ])
+        title = title_response['message']['content'].strip().strip('"')
+
+        # 4. Advanced Analytics (Sentiment, Tags, Action Items)
+        analytics_prompt = f"""
+        You are a medical AI. Analyze the following transcript and extract:
+        1. Sentiment: One word (e.g., "Anxious", "Calm", "Painful", "Relieved", "Neutral").
+        2. Medical Tags: A list of 3-5 key medical terms or conditions discussed.
+        3. Action Items: A list of concrete tasks for the patient (e.g., "Take medication", "Follow up").
+        
+        Return ONLY valid JSON in this format:
+        {{
+            "sentiment": "String",
+            "tags": ["Tag1", "Tag2"],
+            "action_items": ["Action 1", "Action 2"]
+        }}
+        
+        Transcript:
+        {full_text}
+        """
+        analytics_response = ollama.chat(model='llama3', messages=[
+            {'role': 'user', 'content': analytics_prompt},
+        ], format='json')
+        
+        analytics_json = json.loads(analytics_response['message']['content'])
+        
+        return redacted_transcript, soap_summary, title, full_text, analytics_json
 
     except Exception as e:
         print(f"Ollama Error: {e}")
         # Fallback if Ollama fails (e.g. model not pulled)
-        return "Error processing with Ollama. Ensure 'llama3' is pulled.", "Error processing with Ollama."
+        return "Error processing with Ollama. Ensure 'llama3' is pulled.", "Error processing with Ollama.", "Untitled Session", "", {}

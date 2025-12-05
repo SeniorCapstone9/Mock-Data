@@ -1,27 +1,46 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Mic, Square, Loader2 } from 'lucide-react';
 import axios from 'axios';
 
 const Recorder = ({ onUploadStart, onUploadSuccess, onUploadError }) => {
     const [isRecording, setIsRecording] = useState(false);
     const [recordingTime, setRecordingTime] = useState(0);
-    const mediaRecorderRef = useRef(null);
+    const [mediaRecorder, setMediaRecorder] = useState(null); // Changed from useRef to useState
+    const [patients, setPatients] = useState([]);
+    const [selectedPatient, setSelectedPatient] = useState('');
     const chunksRef = useRef([]);
     const timerRef = useRef(null);
+
+    useEffect(() => {
+        // Fetch patients for dropdown
+        const fetchPatients = async () => {
+            try {
+                const token = localStorage.getItem('token');
+                const response = await axios.get('http://localhost:8002/api/patients', {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+                setPatients(response.data);
+            } catch (err) {
+                console.error("Failed to fetch patients", err);
+            }
+        };
+        fetchPatients();
+    }, []);
 
     const startRecording = async () => {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            mediaRecorderRef.current = new MediaRecorder(stream);
+            const newMediaRecorder = new MediaRecorder(stream);
+            setMediaRecorder(newMediaRecorder); // Set the new MediaRecorder instance
             chunksRef.current = [];
 
-            mediaRecorderRef.current.ondataavailable = (e) => {
+            newMediaRecorder.ondataavailable = (e) => {
                 if (e.data.size > 0) {
                     chunksRef.current.push(e.data);
                 }
             };
 
-            mediaRecorderRef.current.onstop = async () => {
+            newMediaRecorder.onstop = async () => {
                 const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
                 await uploadAudio(blob);
 
@@ -29,7 +48,7 @@ const Recorder = ({ onUploadStart, onUploadSuccess, onUploadError }) => {
                 stream.getTracks().forEach(track => track.stop());
             };
 
-            mediaRecorderRef.current.start();
+            newMediaRecorder.start();
             setIsRecording(true);
 
             // Start timer
@@ -45,8 +64,8 @@ const Recorder = ({ onUploadStart, onUploadSuccess, onUploadError }) => {
     };
 
     const stopRecording = () => {
-        if (mediaRecorderRef.current && isRecording) {
-            mediaRecorderRef.current.stop();
+        if (mediaRecorder && isRecording) {
+            mediaRecorder.stop();
             setIsRecording(false);
             clearInterval(timerRef.current);
         }
@@ -56,6 +75,9 @@ const Recorder = ({ onUploadStart, onUploadSuccess, onUploadError }) => {
         onUploadStart();
         const formData = new FormData();
         formData.append('file', blob, 'recording.webm');
+        if (selectedPatient) {
+            formData.append('patient_id', selectedPatient);
+        }
 
         try {
             const response = await axios.post('http://localhost:8002/api/upload', formData, {
@@ -94,9 +116,24 @@ const Recorder = ({ onUploadStart, onUploadSuccess, onUploadError }) => {
             </div>
 
             {!isRecording ? (
-                <button className="btn btn-primary" onClick={startRecording} style={{ fontSize: '1.2rem', padding: '1rem 2rem', borderRadius: '50px' }}>
-                    <Mic size={24} /> Start Recording
-                </button>
+                <div style={{ width: '100%', maxWidth: '300px', margin: '0 auto' }}>
+                    <div style={{ marginBottom: '1rem' }}>
+                        <label style={{ display: 'block', marginBottom: '0.5rem' }}>Select Patient</label>
+                        <select
+                            value={selectedPatient}
+                            onChange={(e) => setSelectedPatient(e.target.value)}
+                            style={{ width: '100%', padding: '0.75rem', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}
+                        >
+                            <option value="">-- Select Patient --</option>
+                            {patients.map(p => (
+                                <option key={p.id} value={p.id}>{p.username}</option>
+                            ))}
+                        </select>
+                    </div>
+                    <button className="btn btn-primary" onClick={startRecording} style={{ width: '100%', fontSize: '1.2rem', padding: '1rem 2rem', borderRadius: '50px' }}>
+                        <Mic size={24} /> Start Recording
+                    </button>
+                </div>
             ) : (
                 <button className="btn btn-danger" onClick={stopRecording} style={{ fontSize: '1.2rem', padding: '1rem 2rem', borderRadius: '50px' }}>
                     <Square size={24} fill="currentColor" /> Stop Recording
