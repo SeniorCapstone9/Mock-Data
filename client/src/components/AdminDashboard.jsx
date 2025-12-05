@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { Users, UserPlus, Shield, LogOut, TrendingUp, Tag } from 'lucide-react';
+import { Users, UserPlus, Shield, LogOut, TrendingUp, Tag, FileText } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
@@ -8,12 +8,26 @@ const AdminDashboard = () => {
     const [users, setUsers] = useState([]);
     const [newUser, setNewUser] = useState({ username: '', password: '', role: 'doctor' });
     const [trends, setTrends] = useState([]);
+    const [records, setRecords] = useState([]);
     const navigate = useNavigate();
 
     useEffect(() => {
         fetchUsers();
         fetchTrends();
+        fetchRecords();
     }, []);
+
+    const fetchRecords = async () => {
+        try {
+            const token = localStorage.getItem('token');
+            const response = await axios.get('http://localhost:8002/api/records', {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            setRecords(response.data);
+        } catch (err) {
+            console.error(err);
+        }
+    };
 
     const fetchTrends = async () => {
         try {
@@ -138,6 +152,46 @@ const AdminDashboard = () => {
                         </tbody>
                     </table>
                 </div>
+            </div>
+
+            <div className="card" style={{ marginTop: '2rem' }}>
+                <h3><FileText size={20} style={{ verticalAlign: 'middle', marginRight: '0.5rem' }} /> All Records (Redacted View)</h3>
+                <table style={{ width: '100%', marginTop: '1rem', borderCollapse: 'collapse' }}>
+                    <thead>
+                        <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                            <th style={{ textAlign: 'left', padding: '0.5rem' }}>ID</th>
+                            <th style={{ textAlign: 'left', padding: '0.5rem' }}>Title</th>
+                            <th style={{ textAlign: 'left', padding: '0.5rem' }}>Patient</th>
+                            <th style={{ textAlign: 'left', padding: '0.5rem' }}>Date</th>
+                            <th style={{ textAlign: 'left', padding: '0.5rem' }}>Status</th>
+                            <th style={{ textAlign: 'left', padding: '0.5rem' }}>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {records.map(r => (
+                            <tr key={r.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                                <td style={{ padding: '0.5rem' }}>{r.id}</td>
+                                <td style={{ padding: '0.5rem' }}>{r.title}</td>
+                                <td style={{ padding: '0.5rem' }}>{r.patient_name}</td>
+                                <td style={{ padding: '0.5rem' }}>{new Date(r.created_at).toLocaleDateString()}</td>
+                                <td style={{ padding: '0.5rem' }}>
+                                    <span className={`status-badge status-${r.status}`}>
+                                        {r.status}
+                                    </span>
+                                </td>
+                                <td style={{ padding: '0.5rem' }}>
+                                    <button
+                                        className="btn btn-primary"
+                                        style={{ padding: '0.25rem 0.5rem', fontSize: '0.875rem' }}
+                                        onClick={() => navigate(`/results/${r.id}`)}
+                                    >
+                                        View
+                                    </button>
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
             </div>
 
             <div className="card" style={{ marginTop: '2rem' }}>

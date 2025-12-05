@@ -187,6 +187,7 @@ def get_results(record_id: int, db: Session = Depends(get_db), current_user: Use
         "id": record.id,
         "status": record.status,
         "full_transcript": record.full_transcript,
+        "redacted_transcript": record.redacted_transcript,
         "soap_summary": record.soap_summary,
         "created_at": record.created_at,
         "sentiment": record.sentiment,

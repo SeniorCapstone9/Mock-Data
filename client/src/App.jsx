@@ -133,6 +133,11 @@ function App() {
                 <SessionDetails />
               </ProtectedRoute>
             } />
+            <Route path="/results/:id" element={
+              <ProtectedRoute>
+                <SessionDetails />
+              </ProtectedRoute>
+            } />
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </main>

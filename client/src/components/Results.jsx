@@ -8,6 +8,7 @@ const Results = ({ recordId }) => {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const navigate = useNavigate();
+    const role = localStorage.getItem('role');
 
     useEffect(() => {
         if (!recordId) return;
@@ -53,10 +54,10 @@ const Results = ({ recordId }) => {
             <div className="card">
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.5rem', borderBottom: '1px solid var(--border)', paddingBottom: '1rem' }}>
                     <Shield className="text-primary" size={24} color="var(--primary)" />
-                    <h3 style={{ margin: 0 }}>Full Transcript</h3>
+                    <h3 style={{ margin: 0 }}>{role === 'admin' ? 'Redacted Transcript' : 'Full Transcript'}</h3>
                 </div>
                 <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.6, color: 'var(--text-main)', maxHeight: '500px', overflowY: 'auto' }}>
-                    {data.full_transcript}
+                    {role === 'admin' ? data.redacted_transcript : data.full_transcript}
                 </div>
             </div>
 
