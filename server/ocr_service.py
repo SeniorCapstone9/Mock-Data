@@ -1,14 +1,15 @@
 import os
-import fitz # pymupdf
-from paddleocr import PaddleOCR
+
+import fitz  # pymupdf
+from PIL import Image
+from ocr_engine import run_ocr_best_config
 
 class OCRService:
     def __init__(self):
         print("Initializing OCR Service (Typed Text Mode)...")
-        # Initialize PaddleOCR for both detection and recognition
-        # use_angle_cls=True handles rotated text
-        self.engine = PaddleOCR(use_angle_cls=True, lang='en', show_log=False)
-        print("OCR Service Initialized: PaddleOCR")
+        # OCR is intentionally centralized in `ocr_engine.py`.
+        # This service handles file/PDF orchestration and delegates preprocessing to `preprocess.py`.
+        print("OCR Service Initialized")
 
     def process_pdf(self, pdf_path):
         """
@@ -25,6 +26,7 @@ class OCRService:
         
         for page_num in range(len(doc)):
             print(f"Processing Page {page_num + 1}/{len(doc)}")
+            temp_img_path = None
             try:
                 page = doc.load_page(page_num)
                 
@@ -46,7 +48,7 @@ class OCRService:
                 full_text.append(f"--- Page {page_num+1} (Error) ---")
             finally:
                 # Cleanup temp file
-                if os.path.exists(temp_img_path):
+                if temp_img_path and os.path.exists(temp_img_path):
                     os.remove(temp_img_path)
                     
         return "\n\n".join(full_text)
@@ -60,21 +62,8 @@ class OCRService:
 
         print(f"Scanning image: {image_path}")
         try:
-            # PaddleOCR.ocr returns a list of results.
-            # result structure: [ [ [ [x1,y1]..], "text", confidence ], ... ]
-            # The 'cls' arg enables angle classification.
-            result = self.engine.ocr(image_path, cls=True)
-            
-            extracted_lines = []
-            
-            # Paddle's result can be nested like [ [line1], [line2] ] or None if no text found
-            if result and result[0]:
-                for line in result[0]:
-                    # line[1] is the ("text", confidence) tuple
-                    text_content = line[1][0]
-                    extracted_lines.append(text_content)
-            
-            final_text = "\n".join(extracted_lines)
+            img = Image.open(image_path).convert("RGB")
+            final_text = run_ocr_best_config(img)
             print("Scan complete.")
             return final_text
 

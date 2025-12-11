@@ -2,38 +2,16 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Webcam from 'react-webcam';
 import axios from 'axios';
-import { Camera, Upload, RefreshCw, FileText, Check, Loader2 } from 'lucide-react';
+import { Camera, Upload, RefreshCw, FileText, Loader2 } from 'lucide-react';
 
-const NoteScanner = () => {
+const NoteScanner = ({ refreshNotes = null }) => {
     const [mode, setMode] = useState('camera'); // 'camera' or 'upload'
     const [image, setImage] = useState(null);
     const [imageFile, setImageFile] = useState(null);
     const [processing, setProcessing] = useState(false);
-    const [result, setResult] = useState(null);
-    const [notes, setNotes] = useState([]);
 
     const webcamRef = useRef(null);
     const navigate = useNavigate();
-
-    useEffect(() => {
-        fetchNotes();
-    }, []);
-
-    const fetchNotes = async () => {
-        try {
-            const token = localStorage.getItem('token');
-            if (!token) return;
-            const response = await axios.get('http://localhost:8002/api/notes', {
-                headers: { Authorization: `Bearer ${token}` }
-            });
-            setNotes(response.data);
-        } catch (err) {
-            console.error(err);
-            if (err.response && err.response.status === 401) {
-                navigate('/login');
-            }
-        }
-    };
 
     const capture = useCallback(() => {
         const imageSrc = webcamRef.current.getScreenshot();
@@ -74,8 +52,11 @@ const NoteScanner = () => {
                 }
             });
 
-            setResult(response.data);
-            fetchNotes(); // Refresh list
+            if (typeof refreshNotes === 'function') {
+                await refreshNotes();
+            }
+            reset();
+            navigate(`/notes/${response.data.id}`);
         } catch (err) {
             console.error(err);
             if (err.response && err.response.status === 401) {
@@ -92,13 +73,10 @@ const NoteScanner = () => {
     const reset = () => {
         setImage(null);
         setImageFile(null);
-        setResult(null);
     };
 
     return (
-        <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
-            {/* Left: Input Area */}
-            <div className="card">
+        <div className="card">
                 <h3><Camera size={20} style={{ verticalAlign: 'middle', marginRight: '0.5rem' }} /> Scan New Note</h3>
 
                 <div style={{ margin: '1rem 0', display: 'flex', gap: '1rem' }}>
@@ -178,68 +156,13 @@ const NoteScanner = () => {
                             onClick={processImage}
                             disabled={processing}
                         >
-                            {processing ? <><Loader2 className="animate-spin" /> Processing LeetCode Handwriting...</> : 'Extract Text with AI'}
+                            {processing ? <><Loader2 className="animate-spin" /> Processing Document...</> : 'Extract Text with AI'}
                         </button>
                         <p style={{ marginTop: '0.5rem', fontSize: '0.8rem', color: 'var(--text-muted)', textAlign: 'center' }}>
                             Note: Processing may take 5-10 seconds.
                         </p>
                     </div>
                 )}
-            </div>
-
-            {/* Right: Results & History */}
-            <div className="card" style={{ display: 'flex', flexDirection: 'column' }}>
-                <h3><FileText size={20} style={{ verticalAlign: 'middle', marginRight: '0.5rem' }} /> Extracted Text</h3>
-
-                <div style={{ flex: 1, overflowY: 'auto', maxHeight: '600px', marginTop: '1rem' }}>
-                    {result ? (
-                        <div className="animate-fade-in">
-                            <div style={{ background: 'var(--success-bg)', color: 'var(--success)', padding: '0.5rem', borderRadius: '4px', marginBottom: '1rem' }}>
-                                <Check size={16} style={{ verticalAlign: 'middle', marginRight: '0.5rem' }} />
-                                Scan Complete
-                            </div>
-                            <textarea
-                                value={result.extracted_text}
-                                readOnly
-                                style={{
-                                    width: '100%',
-                                    height: '300px',
-                                    padding: '1rem',
-                                    borderRadius: '8px',
-                                    border: '1px solid var(--border)',
-                                    background: 'var(--bg-main)',
-                                    color: 'var(--text-main)',
-                                    fontFamily: 'monospace',
-                                    lineHeight: '1.5'
-                                }}
-                            />
-                        </div>
-                    ) : (
-                        <div style={{ textAlign: 'center', color: 'var(--text-muted)', marginTop: '2rem' }}>
-                            <p>Select an image and scan to see results here.</p>
-                        </div>
-                    )}
-
-                    <div style={{ marginTop: '2rem', borderTop: '1px solid var(--border)', paddingTop: '1rem' }}>
-                        <h4>Recent Scans</h4>
-                        <div style={{ marginTop: '1rem' }}>
-                            {notes.map(note => (
-                                <div key={note.id} style={{ padding: '0.75rem', borderBottom: '1px solid var(--border)', cursor: 'pointer' }} onClick={() => setResult(note)}>
-                                    <div style={{ fontSize: '0.9rem', fontWeight: '500' }}>
-                                        Note #{note.id}
-                                    </div>
-                                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                                        {new Date(note.created_at).toLocaleString()}
-                                    </div>
-                                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                        {note.extracted_text?.substring(0, 50)}...
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                </div>
-            </div>
         </div>
     );
 };

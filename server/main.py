@@ -219,6 +219,23 @@ def list_records(db: Session = Depends(get_db), current_user: User = Depends(get
         for r in records
     ]
 
+
+@app.delete("/api/records/{record_id}")
+def delete_record(record_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    record = db.query(Record).filter(Record.id == record_id).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="Record not found")
+
+    # RBAC: patients cannot delete; doctors can delete own; admins can delete any
+    if current_user.role == "patient":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if current_user.role == "doctor" and record.doctor_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    db.delete(record)
+    db.commit()
+    return {"ok": True}
+
 @app.get("/api/analytics")
 def get_analytics(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     records = db.query(Record).filter(Record.status == "completed").all()
@@ -324,6 +341,46 @@ def list_notes(db: Session = Depends(get_db), current_user: User = Depends(get_c
         }
         for n in notes
     ]
+
+
+@app.get("/api/notes/{note_id}")
+def get_note(note_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_doctor)):
+    note = db.query(ScannedNote).filter(ScannedNote.id == note_id).first()
+    if not note:
+        raise HTTPException(status_code=404, detail="Note not found")
+
+    if note.doctor_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    return {
+        "id": note.id,
+        "extracted_text": note.extracted_text,
+        "created_at": note.created_at,
+        "image_path": note.image_path,
+    }
+
+
+@app.delete("/api/notes/{note_id}")
+def delete_note(note_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_doctor)):
+    note = db.query(ScannedNote).filter(ScannedNote.id == note_id).first()
+    if not note:
+        raise HTTPException(status_code=404, detail="Note not found")
+
+    if note.doctor_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    image_path = note.image_path
+    db.delete(note)
+    db.commit()
+
+    # Best-effort cleanup of uploaded temp image/pdf
+    try:
+        if image_path and os.path.exists(image_path):
+            os.remove(image_path)
+    except Exception as e:
+        print(f"Failed to remove note file {image_path}: {e}")
+
+    return {"ok": True}
 
 # Mount temp dir for image access (Quick Hack for Demo)
 from fastapi.staticfiles import StaticFiles
