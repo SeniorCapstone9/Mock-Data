@@ -1,15 +1,17 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Mic, Square, Loader2 } from 'lucide-react';
+import { Mic, Square, Upload, Loader2 } from 'lucide-react';
 import axios from 'axios';
 
 const Recorder = ({ onUploadStart, onUploadSuccess, onUploadError }) => {
     const [isRecording, setIsRecording] = useState(false);
+    const [isUploading, setIsUploading] = useState(false);
     const [recordingTime, setRecordingTime] = useState(0);
     const [mediaRecorder, setMediaRecorder] = useState(null); // Changed from useRef to useState
     const [patients, setPatients] = useState([]);
     const [selectedPatient, setSelectedPatient] = useState('');
     const chunksRef = useRef([]);
     const timerRef = useRef(null);
+    const fileInputRef = useRef(null);
 
     useEffect(() => {
         // Fetch patients for dropdown
@@ -71,25 +73,46 @@ const Recorder = ({ onUploadStart, onUploadSuccess, onUploadError }) => {
         }
     };
 
-    const uploadAudio = async (blob) => {
-        onUploadStart();
+    const uploadAudio = async (fileOrBlob, filename) => {
+        if (isUploading) return;
+        setIsUploading(true);
+        onUploadStart && onUploadStart();
+
         const formData = new FormData();
-        formData.append('file', blob, 'recording.webm');
+        formData.append('file', fileOrBlob, filename || 'recording.webm');
         if (selectedPatient) {
             formData.append('patient_id', selectedPatient);
         }
 
         try {
+            const token = localStorage.getItem('token');
             const response = await axios.post('http://localhost:8002/api/upload', formData, {
                 headers: {
                     'Content-Type': 'multipart/form-data',
+                    Authorization: token ? `Bearer ${token}` : undefined,
                 },
             });
-            onUploadSuccess(response.data.id);
+            onUploadSuccess && onUploadSuccess(response.data.id);
         } catch (error) {
             console.error("Upload error:", error);
-            onUploadError(error);
+            onUploadError && onUploadError(error);
+        } finally {
+            setIsUploading(false);
         }
+    };
+
+    const handlePickFile = () => {
+        if (isUploading || isRecording) return;
+        fileInputRef.current?.click();
+    };
+
+    const handleFileSelected = async (e) => {
+        const file = e.target.files?.[0];
+        // Reset input so selecting the same file again triggers onChange
+        e.target.value = '';
+        if (!file) return;
+
+        await uploadAudio(file, file.name);
     };
 
     const formatTime = (seconds) => {
@@ -130,8 +153,30 @@ const Recorder = ({ onUploadStart, onUploadSuccess, onUploadError }) => {
                             ))}
                         </select>
                     </div>
-                    <button className="btn btn-primary" onClick={startRecording} style={{ width: '100%', fontSize: '1.2rem', padding: '1rem 2rem', borderRadius: '50px' }}>
-                        <Mic size={24} /> Start Recording
+                    <button
+                        className="btn btn-primary"
+                        onClick={startRecording}
+                        disabled={isUploading}
+                        style={{ width: '100%', fontSize: '1.2rem', padding: '1rem 2rem', borderRadius: '50px' }}
+                    >
+                        {isUploading ? <Loader2 className="animate-spin" size={24} /> : <Mic size={24} />} Start Recording
+                    </button>
+
+                    <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="audio/*,video/*"
+                        onChange={handleFileSelected}
+                        style={{ display: 'none' }}
+                    />
+
+                    <button
+                        className="btn"
+                        onClick={handlePickFile}
+                        disabled={isUploading}
+                        style={{ width: '100%', marginTop: '0.75rem', fontSize: '1.05rem', padding: '0.9rem 2rem', borderRadius: '50px', border: '1px solid var(--border)' }}
+                    >
+                        {isUploading ? <Loader2 className="animate-spin" size={22} /> : <Upload size={22} />} Upload Audio File
                     </button>
                 </div>
             ) : (
