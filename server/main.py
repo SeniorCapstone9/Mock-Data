@@ -261,3 +261,70 @@ def get_analytics(db: Session = Depends(get_db), current_user: User = Depends(ge
         "tags": tags_data,
         "sentiment": sentiment_data
     }
+
+# --- OCR Feature ---
+
+from database import ScannedNote
+from ocr_service import get_ocr_service
+
+@app.post("/api/scan-note")
+async def scan_note(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_doctor)
+):
+    # 1. Save Image
+    file_id = str(uuid.uuid4())
+    file_extension = file.filename.split(".")[-1]
+    file_path = os.path.join(TEMP_DIR, f"note_{file_id}.{file_extension}")
+    
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+        
+    try:
+        # 2. Run OCR
+        service = get_ocr_service()
+        # Run in threadpool to not block async event loop
+        import asyncio
+        loop = asyncio.get_event_loop()
+        extracted_text = await loop.run_in_executor(None, service.process_image, file_path)
+        
+        # 3. Save to DB
+        new_note = ScannedNote(
+            image_path=file_path,
+            extracted_text=extracted_text,
+            doctor_id=current_user.id
+        )
+        db.add(new_note)
+        db.commit()
+        db.refresh(new_note)
+        
+        return {
+            "id": new_note.id,
+            "extracted_text": new_note.extracted_text,
+            "created_at": new_note.created_at
+        }
+        
+    except Exception as e:
+        print(f"OCR Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/notes")
+def list_notes(db: Session = Depends(get_db), current_user: User = Depends(get_current_doctor)):
+    notes = db.query(ScannedNote).filter(ScannedNote.doctor_id == current_user.id).order_by(ScannedNote.created_at.desc()).all()
+    
+    # We need to serve the images too, but for now just returning text and ID
+    # In a real app, we'd add StaticFiles mount for the temp dir or storage
+    return [
+        {
+            "id": n.id,
+            "extracted_text": n.extracted_text,
+            "created_at": n.created_at,
+            "image_path": n.image_path # Client might not be able to access this directly without mount
+        }
+        for n in notes
+    ]
+
+# Mount temp dir for image access (Quick Hack for Demo)
+from fastapi.staticfiles import StaticFiles
+app.mount("/temp", StaticFiles(directory="temp"), name="temp")

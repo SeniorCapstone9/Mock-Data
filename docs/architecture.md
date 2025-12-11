@@ -31,6 +31,9 @@ The application is a full-stack web application designed to automatic medical do
 *   **Transcription**: `faster-whisper` (CTranslate2 backend for optimized inference).
 *   **Speaker Diarization**: `pyannote.audio` (Speaker-Diarization-3.1).
 *   **Generative AI**: `Ollama` (running `llama3` locally) for NLP tasks.
+*   **OCR Pipeline**: 
+    *   **Detection**: `PaddleOCR` (CPU-optimized layout analysis).
+    *   **Recognition**: `TrOCR` (Transformer-based handwriting recognition).
 *   **Audio Processing**: `ffmpeg` for format conversion and normalization.
 
 ## Data Flow

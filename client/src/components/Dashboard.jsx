@@ -1,46 +1,89 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { Plus, Calendar, FileAudio, ChevronRight, LogOut, BarChart2 } from 'lucide-react';
+import { Plus, Calendar, FileAudio, ChevronRight, LogOut, BarChart2, Activity, Mic, FileText } from 'lucide-react';
+import Recorder from './Recorder';
+import NoteScanner from './NoteScanner';
 
 const Dashboard = () => {
+    const [user, setUser] = useState({ username: '', role: '' });
     const [records, setRecords] = useState([]);
+    const [stats, setStats] = useState({ total_sessions: 0, total_duration: 0 });
+    const [activeTab, setActiveTab] = useState('record'); // 'record', 'notes', 'list'
     const navigate = useNavigate();
 
     useEffect(() => {
-        const fetchRecords = async () => {
+        // Decode token for user info
+        const token = localStorage.getItem('token');
+        if (token) {
             try {
-                const token = localStorage.getItem('token');
-                if (!token) {
-                    navigate('/login');
-                    return;
-                }
-                const response = await axios.get('http://localhost:8002/api/records', {
-                    headers: { Authorization: `Bearer ${token}` }
-                });
-                setRecords(response.data);
-            } catch (err) {
-                navigate('/login');
+                const payload = JSON.parse(atob(token.split('.')[1]));
+                setUser({ username: payload.sub, role: payload.role });
+            } catch (e) {
+                console.error("Invalid token", e);
             }
-        };
+        } else {
+            navigate('/login');
+        }
+
         fetchRecords();
     }, [navigate]);
 
+    const fetchRecords = async () => {
+        try {
+            const token = localStorage.getItem('token');
+            if (!token) return;
+            const response = await axios.get('http://localhost:8002/api/records', {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            setRecords(response.data);
+
+            // Calc stats
+            const total_duration = response.data.reduce((acc, curr) => acc + curr.duration, 0);
+            setStats({
+                total_sessions: response.data.length,
+                total_duration: Math.round(total_duration / 60)
+            });
+        } catch (err) {
+            console.error(err);
+        }
+    };
+
     const handleLogout = () => {
         localStorage.removeItem('token');
+        localStorage.removeItem('role');
         navigate('/login');
     };
 
     return (
         <div>
             <div className="header">
-                <h2>Session History</h2>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                    <Activity size={32} color="var(--primary)" />
+                    <h2>Doctor Dashboard</h2>
+                </div>
+
+                {/* Tabs */}
+                <div style={{ display: 'flex', gap: '1rem' }}>
+                    <button
+                        className={`btn ${activeTab === 'record' ? 'btn-primary' : ''}`}
+                        onClick={() => setActiveTab('record')}
+                        style={{ border: activeTab !== 'record' ? '1px solid var(--border)' : 'none' }}
+                    >
+                        <Mic size={16} style={{ marginRight: '0.5rem', verticalAlign: 'text-bottom' }} /> Audio Session
+                    </button>
+                    <button
+                        className={`btn ${activeTab === 'notes' ? 'btn-primary' : ''}`}
+                        onClick={() => setActiveTab('notes')}
+                        style={{ border: activeTab !== 'notes' ? '1px solid var(--border)' : 'none' }}
+                    >
+                        <FileText size={16} style={{ marginRight: '0.5rem', verticalAlign: 'text-bottom' }} /> Scan Notes
+                    </button>
+                </div>
+
                 <div style={{ display: 'flex', gap: '1rem' }}>
                     <button className="btn" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }} onClick={() => navigate('/analytics')}>
-                        <BarChart2 size={20} /> Analytics
-                    </button>
-                    <button className="btn btn-primary" onClick={() => navigate('/record')}>
-                        <Plus size={20} /> New Session
+                        <BarChart2 size={20} />
                     </button>
                     <button className="btn" style={{ background: 'var(--secondary)', color: 'white' }} onClick={handleLogout}>
                         <LogOut size={20} />
@@ -48,7 +91,43 @@ const Dashboard = () => {
                 </div>
             </div>
 
+            {/* Tab: Audio Recorder */}
+            {activeTab === 'record' && (
+                <div className="animate-fade-in" style={{ marginBottom: '2rem' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '2rem' }}>
+                        <div className="card">
+                            <h3 style={{ marginBottom: '1rem' }}>Welcome, Dr. {user.username || 'User'}</h3>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                                <div style={{ background: 'var(--bg-main)', padding: '1rem', borderRadius: '8px', textAlign: 'center' }}>
+                                    <div style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>{stats.total_sessions}</div>
+                                    <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>Sessions</div>
+                                </div>
+                                <div style={{ background: 'var(--bg-main)', padding: '1rem', borderRadius: '8px', textAlign: 'center' }}>
+                                    <div style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>{stats.total_duration}m</div>
+                                    <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>Recorded</div>
+                                </div>
+                            </div>
+                        </div>
+                        <Recorder
+                            onUploadStart={() => { }}
+                            onUploadSuccess={(id) => { fetchRecords(); alert("Session Processed!"); }}
+                            onUploadError={(e) => alert("Error uploading: " + e)}
+                        />
+                    </div>
+                </div>
+            )}
+
+            {/* Tab: Note Scanner */}
+            {activeTab === 'notes' && (
+                <div className="animate-fade-in" style={{ marginBottom: '2rem' }}>
+                    <NoteScanner />
+                </div>
+            )}
+
             <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                <div style={{ padding: '1rem', borderBottom: '1px solid var(--border)' }}>
+                    <h3>Recent Audio Sessions</h3>
+                </div>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                     <thead style={{ background: 'var(--background)', borderBottom: '1px solid var(--border)' }}>
                         <tr>
@@ -102,8 +181,8 @@ const Dashboard = () => {
                         ))}
                         {records.length === 0 && (
                             <tr>
-                                <td colSpan="4" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-                                    No sessions found. Start a new recording.
+                                <td colSpan="6" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                                    No sessions found.
                                 </td>
                             </tr>
                         )}

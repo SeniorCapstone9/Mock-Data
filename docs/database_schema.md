@@ -56,6 +56,19 @@ Stores the audio session metadata, transcription, and AI analysis results.
 | `doctor_id` | FK (`users.id`) | The doctor who performed the session |
 | `patient_id` | FK (`users.id`) | The patient the session is for |
 
+
+### 3. `scanned_notes`
+Stores images and OCR text from physical notes.
+
+| Column | Type | Description |
+| :--- | :--- | :--- |
+| `id` | Integer (PK) | Unique ID |
+| `image_path` | String | Local path to the saved image |
+| `extracted_text` | Text | Full text extracted via OCR |
+| `created_at` | DateTime | Timestamp |
+| `doctor_id` | FK (`users.id`) | Doctor who scanned the note |
+
 ## Relationships
 *   **One-to-Many**: A `User` (Doctor) can have many `Record`s.
 *   **One-to-Many**: A `User` (Patient) can have many `Record`s.
+*   **One-to-Many**: A `User` (Doctor) can have many `ScannedNote`s.
