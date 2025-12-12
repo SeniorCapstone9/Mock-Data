@@ -52,8 +52,18 @@ async def process_file_background(record_id: int, file_path: str, db: Session):
         result = await transcribe_audio(wav_path)
         transcript_json = result["json"]
         
+        # 1.5 Fetch Existing Tags (Context for AI)
+        all_records = db.query(Record).all()
+        all_tags = []
+        for r in all_records:
+            if r.medical_tags:
+                all_tags.extend(json.loads(r.medical_tags))
+        
+        from collections import Counter
+        existing_tags = [tag for tag, count in Counter(all_tags).most_common(20)]
+
         # 2. Process (Redact + SOAP + Title + Analytics)
-        redacted, soap, title, full_text, analytics = process_transcript_with_ai(transcript_json)
+        redacted, soap, title, full_text, analytics = process_transcript_with_ai(transcript_json, existing_tags)
         
         # 3. Update DB
         record = db.query(Record).filter(Record.id == record_id).first()
@@ -79,7 +89,14 @@ async def process_file_background(record_id: int, file_path: str, db: Session):
             db.commit()
             
     except Exception as e:
-        print(f"Processing Error: {e}")
+        import traceback
+        error_msg = traceback.format_exc()
+        print(f"Processing Error: {error_msg}")
+        
+        # Log to file for debugging
+        with open("error_log.txt", "w") as f:
+            f.write(error_msg)
+            
         record = db.query(Record).filter(Record.id == record_id).first()
         if record:
             record.status = "failed"
@@ -254,16 +271,39 @@ def get_analytics(db: Session = Depends(get_db), current_user: User = Depends(ge
         count = len([r for r in records if r.created_at.date() == date])
         activity.append({"date": date.strftime("%Y-%m-%d"), "count": count})
         
-    # Aggregate Tags
+    # Aggregate Tags (Global)
     all_tags = []
     for r in records:
         if r.medical_tags:
             all_tags.extend(json.loads(r.medical_tags))
     
     from collections import Counter
-    tag_counts = Counter(all_tags).most_common(10)
+    tag_counts_counter = Counter(all_tags)
+    tag_counts = tag_counts_counter.most_common(10)
     tags_data = [{"text": tag, "value": count} for tag, count in tag_counts]
     
+    # Temporal Tags (Top 5 for Forecasting)
+    top_5_tags = [tag for tag, count in tag_counts_counter.most_common(5)]
+    tags_over_time = []
+    
+    for i in range(6, -1, -1):
+        date = today - timedelta(days=i)
+        day_records = [r for r in records if r.created_at.date() == date]
+        
+        day_data = {"date": date.strftime("%Y-%m-%d")}
+        # Initialize 0
+        for tag in top_5_tags:
+            day_data[tag] = 0
+            
+        for r in day_records:
+            if r.medical_tags:
+                r_tags = json.loads(r.medical_tags)
+                for t in r_tags:
+                    if t in top_5_tags:
+                        day_data[t] += 1
+        
+        tags_over_time.append(day_data)
+
     # Aggregate Sentiment
     sentiments = [r.sentiment for r in records if r.sentiment]
     sentiment_counts = Counter(sentiments)
@@ -275,7 +315,9 @@ def get_analytics(db: Session = Depends(get_db), current_user: User = Depends(ge
         "avg_confidence": round(avg_confidence * 100, 1), # percentage
         "total_words": total_words,
         "activity": activity,
-        "tags": tags_data,
+        "tags": tags_data, # Keep original for reference if needed
+        "tags_over_time": tags_over_time, # New temporal data
+        "top_tags": top_5_tags, # Keys for the frontend
         "sentiment": sentiment_data
     }
 
@@ -382,6 +424,26 @@ def delete_note(note_id: int, db: Session = Depends(get_db), current_user: User 
 
     return {"ok": True}
 
-# Mount temp dir for image access (Quick Hack for Demo)
+# Mount temp dir (Must be before static catch-all)
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 app.mount("/temp", StaticFiles(directory="temp"), name="temp")
+
+# Serve React App (Production Build)
+# Check if dist exists to avoid errors in dev mode without build
+if os.path.exists("../client/dist"):
+    app.mount("/assets", StaticFiles(directory="../client/dist/assets"), name="assets")
+    
+    @app.get("/{full_path:path}")
+    async def serve_react_app(full_path: str):
+        # Allow API calls to pass through
+        if full_path.startswith("api") or full_path.startswith("token"):
+            raise HTTPException(status_code=404, detail="Not found")
+            
+        # Serve index.html for any other route (SPA)
+        file_path = f"../client/dist/{full_path}"
+        if os.path.exists(file_path) and os.path.isfile(file_path):
+            return FileResponse(file_path)
+        return FileResponse("../client/dist/index.html")
+else:
+    print("Warning: '../client/dist' not found. Frontend will not be served by backend.")

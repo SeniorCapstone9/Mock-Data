@@ -4,6 +4,7 @@ import axios from 'axios';
 import { Calendar, FileAudio, ChevronRight, LogOut, BarChart2, Activity, Mic, FileText, ExternalLink } from 'lucide-react';
 import Recorder from './Recorder';
 import NoteScanner from './NoteScanner';
+import { API_URL } from '../config';
 
 const Dashboard = () => {
     const [user, setUser] = useState({ username: '', role: '' });
@@ -37,6 +38,11 @@ const Dashboard = () => {
         }
 
         fetchRecords();
+        fetchStats();
+
+        // Poll for updates every 10 seconds
+        const interval = setInterval(fetchRecords, 10000);
+        return () => clearInterval(interval);
     }, [navigate]);
 
     useEffect(() => {
@@ -49,17 +55,23 @@ const Dashboard = () => {
         try {
             const token = localStorage.getItem('token');
             if (!token) return;
-            const response = await axios.get('http://localhost:8002/api/records', {
+            const response = await axios.get(`${API_URL}/api/records`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
             setRecords(response.data);
+        } catch (err) {
+            console.error(err);
+        }
+    };
 
-            // Calc stats
-            const total_duration = response.data.reduce((acc, curr) => acc + curr.duration, 0);
-            setStats({
-                total_sessions: response.data.length,
-                total_duration: Math.round(total_duration / 60)
+    const fetchStats = async () => {
+        try {
+            const token = localStorage.getItem('token');
+            if (!token) return;
+            const response = await axios.get(`${API_URL}/api/analytics`, {
+                headers: { Authorization: `Bearer ${token}` }
             });
+            setStats(response.data);
         } catch (err) {
             console.error(err);
         }
@@ -69,7 +81,7 @@ const Dashboard = () => {
         try {
             const token = localStorage.getItem('token');
             if (!token) return;
-            const response = await axios.get('http://localhost:8002/api/notes', {
+            const response = await axios.get(`${API_URL}/api/notes`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
 
@@ -91,7 +103,7 @@ const Dashboard = () => {
         const parts = rawPath.split(/[/\\]+/);
         const filename = parts[parts.length - 1];
         if (!filename) return null;
-        return `http://localhost:8002/temp/${filename}`;
+        return `${API_URL}/temp/${filename}`;
     };
 
     const handleLogout = () => {
@@ -155,7 +167,7 @@ const Dashboard = () => {
                         </div>
                         <Recorder
                             onUploadStart={() => { }}
-                            onUploadSuccess={(id) => { fetchRecords(); alert("Session Processed!"); }}
+                            onUploadSuccess={(id) => { navigate(`/session/${id}`); }}
                             onUploadError={(e) => alert("Error uploading: " + e)}
                         />
                     </div>

@@ -2,12 +2,15 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { Users, UserPlus, Shield, LogOut, TrendingUp, Tag, FileText } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area, Legend } from 'recharts';
+import { API_URL } from '../config';
+
+const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8'];
 
 const AdminDashboard = () => {
     const [users, setUsers] = useState([]);
     const [newUser, setNewUser] = useState({ username: '', password: '', role: 'doctor' });
-    const [trends, setTrends] = useState([]);
+    const [analyticsData, setAnalyticsData] = useState(null);
     const [records, setRecords] = useState([]);
     const navigate = useNavigate();
 
@@ -20,7 +23,7 @@ const AdminDashboard = () => {
     const fetchRecords = async () => {
         try {
             const token = localStorage.getItem('token');
-            const response = await axios.get('http://localhost:8002/api/records', {
+            const response = await axios.get(`${API_URL}/api/records`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
             setRecords(response.data);
@@ -33,10 +36,10 @@ const AdminDashboard = () => {
         try {
             const token = localStorage.getItem('token');
             // Admin can access the same analytics endpoint
-            const response = await axios.get('http://localhost:8002/api/analytics', {
+            const response = await axios.get(`${API_URL}/api/analytics`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
-            setTrends(response.data.tags || []);
+            setAnalyticsData(response.data);
         } catch (err) {
             console.error(err);
         }
@@ -45,7 +48,7 @@ const AdminDashboard = () => {
     const fetchUsers = async () => {
         try {
             const token = localStorage.getItem('token');
-            const response = await axios.get('http://localhost:8002/api/users', {
+            const response = await axios.get(`${API_URL}/api/users`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
             setUsers(response.data);
@@ -58,7 +61,7 @@ const AdminDashboard = () => {
         e.preventDefault();
         try {
             const token = localStorage.getItem('token');
-            await axios.post('http://localhost:8002/api/users', newUser, {
+            await axios.post(`${API_URL}/api/users`, newUser, {
                 headers: { Authorization: `Bearer ${token}` }
             });
             setNewUser({ username: '', password: '', role: 'doctor' });
@@ -195,17 +198,37 @@ const AdminDashboard = () => {
             </div>
 
             <div className="card" style={{ marginTop: '2rem' }}>
-                <h3><TrendingUp size={20} style={{ verticalAlign: 'middle', marginRight: '0.5rem' }} /> Global Medical Trends</h3>
-                <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>Most frequent medical topics across all sessions.</p>
+                <h3><TrendingUp size={20} style={{ verticalAlign: 'middle', marginRight: '0.5rem' }} /> Daily Medical Trends (Last 7 Days)</h3>
+                <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>Evolution of top medical topics over time.</p>
                 <div style={{ height: '300px' }}>
                     <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={trends} layout="vertical">
-                            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                            <XAxis type="number" stroke="var(--text-muted)" />
-                            <YAxis dataKey="text" type="category" width={150} stroke="var(--text-muted)" />
-                            <Tooltip contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)' }} />
-                            <Bar dataKey="value" fill="var(--primary)" radius={[0, 4, 4, 0]} />
-                        </BarChart>
+                        {analyticsData && (
+                            <AreaChart data={analyticsData.tags_over_time}>
+                                <defs>
+                                    {analyticsData.top_tags && analyticsData.top_tags.map((tag, index) => (
+                                        <linearGradient key={`grad-${tag}`} id={`color-${tag}`} x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor={COLORS[index % COLORS.length]} stopOpacity={0.8} />
+                                            <stop offset="95%" stopColor={COLORS[index % COLORS.length]} stopOpacity={0} />
+                                        </linearGradient>
+                                    ))}
+                                </defs>
+                                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                                <XAxis dataKey="date" stroke="var(--text-muted)" />
+                                <YAxis stroke="var(--text-muted)" />
+                                <Tooltip contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)' }} />
+                                <Legend />
+                                {analyticsData.top_tags && analyticsData.top_tags.map((tag, index) => (
+                                    <Area
+                                        type="monotone"
+                                        key={tag}
+                                        dataKey={tag}
+                                        stackId="1"
+                                        stroke={COLORS[index % COLORS.length]}
+                                        fill={`url(#color-${tag})`}
+                                    />
+                                ))}
+                            </AreaChart>
+                        )}
                     </ResponsiveContainer>
                 </div>
             </div>

@@ -114,7 +114,7 @@ const SessionDetails = () => {
           </button>
         )}
       </div>
-      <Results recordId={id} />
+      <Results id={id} />
     </div>
   );
 };

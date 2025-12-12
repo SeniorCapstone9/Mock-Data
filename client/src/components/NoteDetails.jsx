@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import { FileText, Loader2, AlertCircle } from 'lucide-react';
+import { API_URL } from '../config';
 
 const NoteDetails = ({ noteId }) => {
     const [note, setNote] = useState(null);
@@ -13,7 +14,7 @@ const NoteDetails = ({ noteId }) => {
         const fetchNote = async () => {
             try {
                 const token = localStorage.getItem('token');
-                const response = await axios.get(`http://localhost:8002/api/notes/${noteId}`, {
+                const response = await axios.get(`${API_URL}/api/notes/${noteId}`, {
                     headers: { Authorization: `Bearer ${token}` }
                 });
                 setNote(response.data);

@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, AreaChart, Area } from 'recharts';
 import { Activity, Clock, FileText, CheckCircle, TrendingUp, Heart, Tag, ArrowLeft } from 'lucide-react';
+import { API_URL } from '../config';
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8'];
 
@@ -30,7 +31,7 @@ const Analytics = () => {
                     navigate('/login');
                     return;
                 }
-                const response = await axios.get('http://localhost:8002/api/analytics', {
+                const response = await axios.get(`${API_URL}/api/analytics`, {
                     headers: { Authorization: `Bearer ${token}` }
                 });
                 setData(response.data);
@@ -104,16 +105,34 @@ const Analytics = () => {
                 </div>
 
                 <div className="card" style={{ gridColumn: '1 / -1' }}>
-                    <h3><Tag size={20} style={{ verticalAlign: 'middle', marginRight: '0.5rem' }} /> Top Medical Topics</h3>
+                    <h3><Tag size={20} style={{ verticalAlign: 'middle', marginRight: '0.5rem' }} /> Daily Medical Trends (Last 7 Days)</h3>
                     <div style={{ height: '300px' }}>
                         <ResponsiveContainer width="100%" height="100%">
-                            <BarChart data={data.tags} layout="vertical">
+                            <AreaChart data={data.tags_over_time}>
+                                <defs>
+                                    {data.top_tags && data.top_tags.map((tag, index) => (
+                                        <linearGradient key={`grad-${tag}`} id={`color-${tag}`} x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor={COLORS[index % COLORS.length]} stopOpacity={0.8} />
+                                            <stop offset="95%" stopColor={COLORS[index % COLORS.length]} stopOpacity={0} />
+                                        </linearGradient>
+                                    ))}
+                                </defs>
                                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                                <XAxis type="number" stroke="var(--text-muted)" />
-                                <YAxis dataKey="text" type="category" width={150} stroke="var(--text-muted)" />
+                                <XAxis dataKey="date" stroke="var(--text-muted)" />
+                                <YAxis stroke="var(--text-muted)" />
                                 <Tooltip contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)' }} />
-                                <Bar dataKey="value" fill="var(--primary)" radius={[0, 4, 4, 0]} />
-                            </BarChart>
+                                <Legend />
+                                {data.top_tags && data.top_tags.map((tag, index) => (
+                                    <Area
+                                        type="monotone"
+                                        key={tag}
+                                        dataKey={tag}
+                                        stackId="1"
+                                        stroke={COLORS[index % COLORS.length]}
+                                        fill={`url(#color-${tag})`}
+                                    />
+                                ))}
+                            </AreaChart>
                         </ResponsiveContainer>
                     </div>
                 </div>

@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Mic, Square, Upload, Loader2 } from 'lucide-react';
 import axios from 'axios';
+import { API_URL } from '../config';
 
 const Recorder = ({ onUploadStart, onUploadSuccess, onUploadError }) => {
     const [isRecording, setIsRecording] = useState(false);
@@ -18,7 +19,7 @@ const Recorder = ({ onUploadStart, onUploadSuccess, onUploadError }) => {
         const fetchPatients = async () => {
             try {
                 const token = localStorage.getItem('token');
-                const response = await axios.get('http://localhost:8002/api/patients', {
+                const response = await axios.get(`${API_URL}/api/patients`, {
                     headers: { Authorization: `Bearer ${token}` }
                 });
                 setPatients(response.data);
@@ -86,7 +87,7 @@ const Recorder = ({ onUploadStart, onUploadSuccess, onUploadError }) => {
 
         try {
             const token = localStorage.getItem('token');
-            const response = await axios.post('http://localhost:8002/api/upload', formData, {
+            const response = await axios.post(`${API_URL}/api/upload`, formData, {
                 headers: {
                     'Content-Type': 'multipart/form-data',
                     Authorization: token ? `Bearer ${token}` : undefined,
