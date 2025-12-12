@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useParams } from 'react-router-dom';
-import { Stethoscope, ArrowLeft } from 'lucide-react';
+import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useParams, Link, useLocation } from 'react-router-dom';
+import { Stethoscope, ArrowLeft, LayoutDashboard, LogIn } from 'lucide-react';
 import axios from 'axios';
 import Login from './components/Login';
 import Dashboard from './components/Dashboard';
@@ -10,6 +10,7 @@ import Results from './components/Results';
 import AdminDashboard from './components/AdminDashboard';
 import PatientPortal from './components/PatientPortal';
 import NoteDetails from './components/NoteDetails';
+import LandingPage from './components/LandingPage';
 
 // Auth Guard
 const ProtectedRoute = ({ children }) => {
@@ -167,17 +168,45 @@ const NoteDetailsPage = () => {
   );
 };
 
+// Header Component
+const Header = () => {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const isLoggedIn = !!localStorage.getItem('token');
+
+  // Don't show header button on login page
+  const showButton = location.pathname !== '/login';
+
+  return (
+    <header className="header">
+      <div className="logo" onClick={() => navigate('/')} style={{ cursor: 'pointer' }}>
+        <Stethoscope size={32} />
+        <span>MediScribe AI</span>
+      </div>
+      {showButton && (
+        <button
+          className="btn btn-primary"
+          onClick={() => navigate(isLoggedIn ? '/dashboard' : '/login')}
+          style={{
+            padding: '0.5rem 1rem',
+            fontSize: '0.9rem',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.5rem'
+          }}
+        >
+          {isLoggedIn ? <><LayoutDashboard size={18} /> Dashboard</> : <><LogIn size={18} /> Login</>}
+        </button>
+      )}
+    </header>
+  );
+};
+
 function App() {
   return (
     <Router>
       <div className="container">
-        <header className="header">
-          <div className="logo">
-            <Stethoscope size={32} />
-            <span>MediScribe AI</span>
-          </div>
-        </header>
-
+        <Header />
         <main>
           <Routes>
             <Route path="/login" element={<Login />} />
@@ -221,7 +250,7 @@ function App() {
                 <NoteDetailsPage />
               </ProtectedRoute>
             } />
-            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/" element={<LandingPage />} />
           </Routes>
         </main>
       </div>
