@@ -118,7 +118,7 @@ async def transcribe_audio(file_path: str):
         print(f"Transcription Error: {e}")
         raise e
 
-def process_transcript_with_ai(transcript_json: str):
+def process_transcript_with_ai(transcript_json: str, existing_tags: list = []):
     try:
         data = json.loads(transcript_json)
         full_text = ""
@@ -168,10 +168,14 @@ def process_transcript_with_ai(transcript_json: str):
         title = title_response['message']['content'].strip().strip('"')
 
         # 4. Advanced Analytics (Sentiment, Tags, Action Items)
+        existing_tags_str = ", ".join(existing_tags)
         analytics_prompt = f"""
         You are a medical AI. Analyze the following transcript and extract:
-        1. Sentiment: One word (e.g., "Anxious", "Calm", "Painful", "Relieved", "Neutral").
-        2. Medical Tags: A list of 3-5 key medical terms or conditions discussed.
+        1. Sentiment: Provide a nuanced, one-word sentiment (e.g., "Anxious", "Relieved", "Frustrated", "Hopeful", "Exhausted", "Optimistic"). Avoid generic terms like "Painful" or "Neutral" unless strictly accurate.
+        2. Medical Tags: A list of 3-5 key **Medical Conditions or Symptoms**. 
+            - **DO NOT include medications** (e.g., Tylenol, Aspirin) or treatments.
+            - Use **Standardized Singular Form** (e.g., "Headache", not "Headaches").
+            - Here is a list of existing tags to prioritize if relevant: [{existing_tags_str}].
         3. Action Items: A list of concrete tasks for the patient (e.g., "Take medication", "Follow up").
         
         Return ONLY valid JSON in this format:

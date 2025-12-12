@@ -52,8 +52,18 @@ async def process_file_background(record_id: int, file_path: str, db: Session):
         result = await transcribe_audio(wav_path)
         transcript_json = result["json"]
         
+        # 1.5 Fetch Existing Tags (Context for AI)
+        all_records = db.query(Record).all()
+        all_tags = []
+        for r in all_records:
+            if r.medical_tags:
+                all_tags.extend(json.loads(r.medical_tags))
+        
+        from collections import Counter
+        existing_tags = [tag for tag, count in Counter(all_tags).most_common(20)]
+
         # 2. Process (Redact + SOAP + Title + Analytics)
-        redacted, soap, title, full_text, analytics = process_transcript_with_ai(transcript_json)
+        redacted, soap, title, full_text, analytics = process_transcript_with_ai(transcript_json, existing_tags)
         
         # 3. Update DB
         record = db.query(Record).filter(Record.id == record_id).first()
@@ -79,7 +89,14 @@ async def process_file_background(record_id: int, file_path: str, db: Session):
             db.commit()
             
     except Exception as e:
-        print(f"Processing Error: {e}")
+        import traceback
+        error_msg = traceback.format_exc()
+        print(f"Processing Error: {error_msg}")
+        
+        # Log to file for debugging
+        with open("error_log.txt", "w") as f:
+            f.write(error_msg)
+            
         record = db.query(Record).filter(Record.id == record_id).first()
         if record:
             record.status = "failed"
@@ -219,6 +236,23 @@ def list_records(db: Session = Depends(get_db), current_user: User = Depends(get
         for r in records
     ]
 
+
+@app.delete("/api/records/{record_id}")
+def delete_record(record_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    record = db.query(Record).filter(Record.id == record_id).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="Record not found")
+
+    # RBAC: patients cannot delete; doctors can delete own; admins can delete any
+    if current_user.role == "patient":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if current_user.role == "doctor" and record.doctor_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    db.delete(record)
+    db.commit()
+    return {"ok": True}
+
 @app.get("/api/analytics")
 def get_analytics(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     records = db.query(Record).filter(Record.status == "completed").all()
@@ -237,16 +271,39 @@ def get_analytics(db: Session = Depends(get_db), current_user: User = Depends(ge
         count = len([r for r in records if r.created_at.date() == date])
         activity.append({"date": date.strftime("%Y-%m-%d"), "count": count})
         
-    # Aggregate Tags
+    # Aggregate Tags (Global)
     all_tags = []
     for r in records:
         if r.medical_tags:
             all_tags.extend(json.loads(r.medical_tags))
     
     from collections import Counter
-    tag_counts = Counter(all_tags).most_common(10)
+    tag_counts_counter = Counter(all_tags)
+    tag_counts = tag_counts_counter.most_common(10)
     tags_data = [{"text": tag, "value": count} for tag, count in tag_counts]
     
+    # Temporal Tags (Top 5 for Forecasting)
+    top_5_tags = [tag for tag, count in tag_counts_counter.most_common(5)]
+    tags_over_time = []
+    
+    for i in range(6, -1, -1):
+        date = today - timedelta(days=i)
+        day_records = [r for r in records if r.created_at.date() == date]
+        
+        day_data = {"date": date.strftime("%Y-%m-%d")}
+        # Initialize 0
+        for tag in top_5_tags:
+            day_data[tag] = 0
+            
+        for r in day_records:
+            if r.medical_tags:
+                r_tags = json.loads(r.medical_tags)
+                for t in r_tags:
+                    if t in top_5_tags:
+                        day_data[t] += 1
+        
+        tags_over_time.append(day_data)
+
     # Aggregate Sentiment
     sentiments = [r.sentiment for r in records if r.sentiment]
     sentiment_counts = Counter(sentiments)
@@ -258,6 +315,135 @@ def get_analytics(db: Session = Depends(get_db), current_user: User = Depends(ge
         "avg_confidence": round(avg_confidence * 100, 1), # percentage
         "total_words": total_words,
         "activity": activity,
-        "tags": tags_data,
+        "tags": tags_data, # Keep original for reference if needed
+        "tags_over_time": tags_over_time, # New temporal data
+        "top_tags": top_5_tags, # Keys for the frontend
         "sentiment": sentiment_data
     }
+
+# --- OCR Feature ---
+
+from database import ScannedNote
+from ocr_service import get_ocr_service
+
+@app.post("/api/scan-note")
+async def scan_note(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_doctor)
+):
+    # 1. Save Image
+    file_id = str(uuid.uuid4())
+    file_extension = file.filename.split(".")[-1]
+    file_path = os.path.join(TEMP_DIR, f"note_{file_id}.{file_extension}")
+    
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+        
+    try:
+        # 2. Run OCR
+        service = get_ocr_service()
+        # Run in threadpool to not block async event loop
+        import asyncio
+        loop = asyncio.get_event_loop()
+        extracted_text = await loop.run_in_executor(None, service.process_image, file_path)
+        
+        # 3. Save to DB
+        new_note = ScannedNote(
+            image_path=file_path,
+            extracted_text=extracted_text,
+            doctor_id=current_user.id
+        )
+        db.add(new_note)
+        db.commit()
+        db.refresh(new_note)
+        
+        return {
+            "id": new_note.id,
+            "extracted_text": new_note.extracted_text,
+            "created_at": new_note.created_at
+        }
+        
+    except Exception as e:
+        print(f"OCR Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/notes")
+def list_notes(db: Session = Depends(get_db), current_user: User = Depends(get_current_doctor)):
+    notes = db.query(ScannedNote).filter(ScannedNote.doctor_id == current_user.id).order_by(ScannedNote.created_at.desc()).all()
+    
+    # We need to serve the images too, but for now just returning text and ID
+    # In a real app, we'd add StaticFiles mount for the temp dir or storage
+    return [
+        {
+            "id": n.id,
+            "extracted_text": n.extracted_text,
+            "created_at": n.created_at,
+            "image_path": n.image_path # Client might not be able to access this directly without mount
+        }
+        for n in notes
+    ]
+
+
+@app.get("/api/notes/{note_id}")
+def get_note(note_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_doctor)):
+    note = db.query(ScannedNote).filter(ScannedNote.id == note_id).first()
+    if not note:
+        raise HTTPException(status_code=404, detail="Note not found")
+
+    if note.doctor_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    return {
+        "id": note.id,
+        "extracted_text": note.extracted_text,
+        "created_at": note.created_at,
+        "image_path": note.image_path,
+    }
+
+
+@app.delete("/api/notes/{note_id}")
+def delete_note(note_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_doctor)):
+    note = db.query(ScannedNote).filter(ScannedNote.id == note_id).first()
+    if not note:
+        raise HTTPException(status_code=404, detail="Note not found")
+
+    if note.doctor_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    image_path = note.image_path
+    db.delete(note)
+    db.commit()
+
+    # Best-effort cleanup of uploaded temp image/pdf
+    try:
+        if image_path and os.path.exists(image_path):
+            os.remove(image_path)
+    except Exception as e:
+        print(f"Failed to remove note file {image_path}: {e}")
+
+    return {"ok": True}
+
+# Mount temp dir (Must be before static catch-all)
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+app.mount("/temp", StaticFiles(directory="temp"), name="temp")
+
+# Serve React App (Production Build)
+# Check if dist exists to avoid errors in dev mode without build
+if os.path.exists("../client/dist"):
+    app.mount("/assets", StaticFiles(directory="../client/dist/assets"), name="assets")
+    
+    @app.get("/{full_path:path}")
+    async def serve_react_app(full_path: str):
+        # Allow API calls to pass through
+        if full_path.startswith("api") or full_path.startswith("token"):
+            raise HTTPException(status_code=404, detail="Not found")
+            
+        # Serve index.html for any other route (SPA)
+        file_path = f"../client/dist/{full_path}"
+        if os.path.exists(file_path) and os.path.isfile(file_path):
+            return FileResponse(file_path)
+        return FileResponse("../client/dist/index.html")
+else:
+    print("Warning: '../client/dist' not found. Frontend will not be served by backend.")

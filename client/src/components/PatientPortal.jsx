@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { Calendar, FileText, LogOut, User, CheckSquare } from 'lucide-react';
+import { API_URL } from '../config';
 
 const PatientPortal = () => {
     const [records, setRecords] = useState([]);
@@ -11,7 +12,7 @@ const PatientPortal = () => {
         const fetchRecords = async () => {
             try {
                 const token = localStorage.getItem('token');
-                const response = await axios.get('http://localhost:8002/api/records', {
+                const response = await axios.get(`${API_URL}/api/records`, {
                     headers: { Authorization: `Bearer ${token}` }
                 });
                 setRecords(response.data);

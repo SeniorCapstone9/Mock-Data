@@ -2,8 +2,9 @@ import React, { useEffect, useState } from 'react';
 import { FileText, Shield, Activity, CheckCircle, AlertCircle, Loader2, ArrowLeft } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
+import { API_URL } from '../config';
 
-const Results = ({ recordId }) => {
+const Results = ({ id }) => {
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
@@ -11,29 +12,47 @@ const Results = ({ recordId }) => {
     const role = localStorage.getItem('role');
 
     useEffect(() => {
-        if (!recordId) return;
+        if (!id) return;
 
-        const pollInterval = setInterval(async () => {
+        const fetchResult = async () => {
             try {
-                const response = await axios.get(`http://localhost:8002/api/results/${recordId}`);
+                const token = localStorage.getItem('token');
+                const response = await axios.get(`${API_URL}/api/results/${id}`, {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
                 setData(response.data);
 
                 if (response.data.status === 'completed' || response.data.status === 'failed') {
                     setLoading(false);
-                    clearInterval(pollInterval);
                 }
             } catch (err) {
                 console.error("Polling error:", err);
                 setError("Failed to fetch results");
                 setLoading(false);
-                clearInterval(pollInterval);
             }
-        }, 2000);
+        };
 
-        return () => clearInterval(pollInterval);
-    }, [recordId]);
+        fetchResult(); // Fetch immediately on mount
+        const interval = setInterval(fetchResult, 3000); // Poll every 3s
 
-    if (!data && loading) return (
+        return () => clearInterval(interval); // Cleanup on unmount
+    }, [id]);
+
+    const deleteRecord = async () => {
+        if (!confirm("Are you sure you want to delete this record?")) return;
+        try {
+            const token = localStorage.getItem('token');
+            await axios.delete(`${API_URL}/api/records/${id}`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            alert("Record deleted");
+            navigate('/dashboard');
+        } catch (err) {
+            alert("Error deleting record");
+        }
+    };
+
+    if (loading) return (
         <div className="card" style={{ textAlign: 'center', padding: '3rem' }}>
             <Loader2 className="animate-spin" size={48} style={{ margin: '0 auto 1rem', color: 'var(--primary)' }} />
             <h3>Processing Audio...</h3>
@@ -50,7 +69,7 @@ const Results = ({ recordId }) => {
     );
 
     return (
-        <div className="grid">
+        <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
             <div className="card">
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.5rem', borderBottom: '1px solid var(--border)', paddingBottom: '1rem' }}>
                     <Shield className="text-primary" size={24} color="var(--primary)" />
@@ -70,6 +89,7 @@ const Results = ({ recordId }) => {
                     {data.soap_summary}
                 </div>
             </div>
+
         </div>
     );
 };

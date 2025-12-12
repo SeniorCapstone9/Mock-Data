@@ -44,3 +44,14 @@ Get full details for a specific record.
 
 ### GET `/api/analytics`
 Get aggregated statistics (Total sessions, word counts, tag clouds).
+
+## OCR / Notes
+
+### POST `/api/scan-note`
+Upload an image (JPEG/PNG) to be scanned.
+*   **Content-Type**: `multipart/form-data`
+*   **Fields**: `file`
+*   **Returns**: `{ "id": 1, "extracted_text": "...", "created_at": "..." }`
+
+### GET `/api/notes`
+List all scanned notes for the current doctor.

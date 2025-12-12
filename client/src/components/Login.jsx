@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { Lock } from 'lucide-react';
 
+import { API_URL } from '../config';
+
 const Login = () => {
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
@@ -11,12 +13,16 @@ const Login = () => {
 
     const handleLogin = async (e) => {
         e.preventDefault();
-        try {
-            const formData = new FormData();
-            formData.append('username', username);
-            formData.append('password', password);
+        setError(''); // Clear previous error
 
-            const response = await axios.post('http://localhost:8002/token', formData);
+        try {
+            // Use FormData from the form element directly to handle autofill correctly
+            const formData = new FormData(e.currentTarget);
+
+            // Log what we are sending for debugging (safe to remove later)
+            console.log("Logging in with:", Object.fromEntries(formData));
+
+            const response = await axios.post(`${API_URL}/token`, formData);
             localStorage.setItem('token', response.data.access_token);
             localStorage.setItem('role', response.data.role);
 
@@ -24,6 +30,7 @@ const Login = () => {
             else if (response.data.role === 'patient') navigate('/portal');
             else navigate('/dashboard');
         } catch (err) {
+            console.error("Login failed:", err);
             setError('Invalid credentials');
         }
     };
@@ -43,6 +50,7 @@ const Login = () => {
                         <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500' }}>Username</label>
                         <input
                             type="text"
+                            name="username"
                             value={username}
                             onChange={(e) => setUsername(e.target.value)}
                             style={{ width: '100%', padding: '0.75rem', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}
@@ -54,6 +62,7 @@ const Login = () => {
                         <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500' }}>Password</label>
                         <input
                             type="password"
+                            name="password"
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
                             style={{ width: '100%', padding: '0.75rem', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}

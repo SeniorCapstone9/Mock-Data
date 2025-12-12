@@ -49,6 +49,19 @@ class User(Base):
     hashed_password = Column(String)
     role = Column(String, default="patient") # admin, doctor, patient
 
+class ScannedNote(Base):
+    __tablename__ = "scanned_notes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    image_path = Column(String)
+    extracted_text = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    doctor_id = Column(Integer, ForeignKey("users.id"))
+    doctor = relationship("User", back_populates="scanned_notes")
+
+User.scanned_notes = relationship("ScannedNote", back_populates="doctor")
+
 def init_db():
     Base.metadata.create_all(bind=engine)
 

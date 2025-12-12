@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useParams } from 'react-router-dom';
-import { Stethoscope, ArrowLeft } from 'lucide-react';
+import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useParams, Link, useLocation } from 'react-router-dom';
+import { Stethoscope, ArrowLeft, LayoutDashboard, LogIn } from 'lucide-react';
 import axios from 'axios';
 import Login from './components/Login';
 import Dashboard from './components/Dashboard';
@@ -9,6 +9,8 @@ import Recorder from './components/Recorder';
 import Results from './components/Results';
 import AdminDashboard from './components/AdminDashboard';
 import PatientPortal from './components/PatientPortal';
+import NoteDetails from './components/NoteDetails';
+import LandingPage from './components/LandingPage';
 
 // Auth Guard
 const ProtectedRoute = ({ children }) => {
@@ -70,6 +72,7 @@ const RecordSession = () => {
 const SessionDetails = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const role = localStorage.getItem('role');
 
   // Add Authorization header
   useEffect(() => {
@@ -79,13 +82,123 @@ const SessionDetails = () => {
     }
   }, []);
 
+  const handleDelete = async () => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      navigate('/login');
+      return;
+    }
+
+    const ok = window.confirm('Delete this transcript/session? This cannot be undone.');
+    if (!ok) return;
+
+    try {
+      await axios.delete(`http://localhost:8002/api/records/${id}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      navigate('/dashboard');
+    } catch (err) {
+      console.error(err);
+      alert('Failed to delete session.');
+    }
+  };
+
   return (
     <div>
-      <button className="btn" onClick={() => navigate('/dashboard')} style={{ marginBottom: '1rem', paddingLeft: 0 }}>
-        <ArrowLeft size={20} /> Back to Dashboard
-      </button>
-      <Results recordId={id} />
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginBottom: '1rem' }}>
+        <button className="btn" onClick={() => navigate('/dashboard')} style={{ paddingLeft: 0 }}>
+          <ArrowLeft size={20} /> Back to Dashboard
+        </button>
+        {role !== 'patient' && (
+          <button className="btn" onClick={handleDelete} style={{ background: 'var(--error)', color: 'white', border: 'none' }}>
+            Delete
+          </button>
+        )}
+      </div>
+      <Results id={id} />
     </div>
+  );
+};
+
+// Wrapper for OCR Note Details
+const NoteDetailsPage = () => {
+  const { id } = useParams();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (token) {
+      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+    }
+  }, []);
+
+  const handleDelete = async () => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      navigate('/login');
+      return;
+    }
+
+    const ok = window.confirm('Delete this scanned note? This cannot be undone.');
+    if (!ok) return;
+
+    try {
+      await axios.delete(`http://localhost:8002/api/notes/${id}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      navigate('/dashboard?tab=notes');
+    } catch (err) {
+      console.error(err);
+      alert('Failed to delete note.');
+    }
+  };
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginBottom: '1rem' }}>
+        <button className="btn" onClick={() => navigate('/dashboard?tab=notes')} style={{ paddingLeft: 0 }}>
+          <ArrowLeft size={20} /> Back to Dashboard
+        </button>
+        <button className="btn" onClick={handleDelete} style={{ background: 'var(--error)', color: 'white', border: 'none' }}>
+          Delete
+        </button>
+      </div>
+      <NoteDetails noteId={id} />
+    </div>
+  );
+};
+
+// Header Component
+const Header = () => {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const isLoggedIn = !!localStorage.getItem('token');
+
+  // Don't show header button on login page
+  const showButton = location.pathname !== '/login';
+
+  return (
+    <header className="header">
+      <div className="logo" onClick={() => navigate('/')} style={{ cursor: 'pointer' }}>
+        <Stethoscope size={32} />
+        <span>MediScribe AI</span>
+      </div>
+      {showButton && (
+        <button
+          className="btn btn-primary"
+          onClick={() => navigate(isLoggedIn ? '/dashboard' : '/login')}
+          style={{
+            padding: '0.5rem 1rem',
+            fontSize: '0.9rem',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.5rem'
+          }}
+        >
+          {isLoggedIn ? <><LayoutDashboard size={18} /> Dashboard</> : <><LogIn size={18} /> Login</>}
+        </button>
+      )}
+    </header>
   );
 };
 
@@ -93,13 +206,7 @@ function App() {
   return (
     <Router>
       <div className="container">
-        <header className="header">
-          <div className="logo">
-            <Stethoscope size={32} />
-            <span>MediScribe AI</span>
-          </div>
-        </header>
-
+        <Header />
         <main>
           <Routes>
             <Route path="/login" element={<Login />} />
@@ -138,7 +245,12 @@ function App() {
                 <SessionDetails />
               </ProtectedRoute>
             } />
-            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/notes/:id" element={
+              <ProtectedRoute>
+                <NoteDetailsPage />
+              </ProtectedRoute>
+            } />
+            <Route path="/" element={<LandingPage />} />
           </Routes>
         </main>
       </div>
