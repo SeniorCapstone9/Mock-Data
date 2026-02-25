@@ -42,9 +42,11 @@ __pycache__/
 
 # Virtual environments
 .venv/
+.venv
 venv/
 env/
 .conda/
+**/.venv
 
 # Python tooling caches
 .pytest_cache/
@@ -64,6 +66,8 @@ dist/
 *.db
 *.sqlite
 *.sqlite3
+server/error_log.txt
+*.log
 
 # If you store large recordings/transcripts locally, keep them out of git
 *.wav

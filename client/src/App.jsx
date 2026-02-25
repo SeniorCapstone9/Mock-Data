@@ -5,12 +5,14 @@ import axios from 'axios';
 import Login from './components/Login';
 import Dashboard from './components/Dashboard';
 import Analytics from './components/Analytics';
+import Notifications from './components/Notifications';
 import Recorder from './components/Recorder';
 import Results from './components/Results';
 import AdminDashboard from './components/AdminDashboard';
 import PatientPortal from './components/PatientPortal';
 import NoteDetails from './components/NoteDetails';
 import LandingPage from './components/LandingPage';
+import { API_URL } from './config';
 
 // Auth Guard
 const ProtectedRoute = ({ children }) => {
@@ -93,7 +95,7 @@ const SessionDetails = () => {
     if (!ok) return;
 
     try {
-      await axios.delete(`http://localhost:8002/api/records/${id}`, {
+      await axios.delete(`${API_URL}/api/records/${id}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       navigate('/dashboard');
@@ -143,7 +145,7 @@ const NoteDetailsPage = () => {
     if (!ok) return;
 
     try {
-      await axios.delete(`http://localhost:8002/api/notes/${id}`, {
+      await axios.delete(`${API_URL}/api/notes/${id}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       navigate('/dashboard?tab=notes');
@@ -228,6 +230,11 @@ function App() {
             <Route path="/analytics" element={
               <ProtectedRoute>
                 <Analytics />
+              </ProtectedRoute>
+            } />
+            <Route path="/notifications" element={
+              <ProtectedRoute>
+                <Notifications />
               </ProtectedRoute>
             } />
             <Route path="/record" element={

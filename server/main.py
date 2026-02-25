@@ -7,11 +7,27 @@ import os
 import uuid
 import json
 import subprocess
-from datetime import timedelta
-from database import get_db, init_db, Record, User
-from services import transcribe_audio, process_transcript_with_ai
+import csv
+import io
+import re
+from datetime import timedelta, datetime, date
+from database import get_db, init_db, Record, User, NotificationVisit, Notification, NotificationDelivery
 from auth import create_access_token, get_current_user, get_password_hash, verify_password, ACCESS_TOKEN_EXPIRE_MINUTES, get_current_active_admin, get_current_doctor
 from pydantic import BaseModel
+from notification_engine import canonicalize_symptom, run_notification_engine, distribution_for_group
+from notification_delivery import send_email_notification
+
+
+def _load_ai_services():
+    # Lazy import heavy ML stack so the API can start without optional AI deps.
+    from services import transcribe_audio, process_transcript_with_ai
+    return transcribe_audio, process_transcript_with_ai
+
+
+def _load_ocr_service():
+    # Lazy import OCR stack only when OCR endpoints are called.
+    from ocr_service import get_ocr_service
+    return get_ocr_service
 
 app = FastAPI()
 
@@ -45,6 +61,8 @@ create_default_admin()
 async def process_file_background(record_id: int, file_path: str, db: Session):
     wav_path = file_path.rsplit('.', 1)[0] + ".wav"
     try:
+        transcribe_audio, process_transcript_with_ai = _load_ai_services()
+
         # 0. Convert to WAV (16kHz, Mono) for best compatibility
         subprocess.run(["ffmpeg", "-i", file_path, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wav_path, "-y"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -127,6 +145,73 @@ class UserCreate(BaseModel):
     username: str
     password: str
     role: str
+
+
+STATE_CODE_RE = re.compile(r"^[A-Z]{2}$")
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+DEFAULT_NOTIFICATION_RECIPIENTS = [
+    email.strip().lower()
+    for email in os.getenv("NOTIFICATION_ALWAYS_EMAILS", "").split(",")
+    if email.strip()
+]
+
+
+def normalize_location(location: str) -> str:
+    value = (location or "").strip().upper()
+    if not STATE_CODE_RE.match(value):
+        raise HTTPException(status_code=400, detail="location must be a 2-letter uppercase state code")
+    return value
+
+
+def normalize_symptoms(symptoms):
+    normalized = []
+    for symptom in symptoms or []:
+        if not isinstance(symptom, str):
+            continue
+        canonical = canonicalize_symptom(symptom)
+        if canonical:
+            normalized.append(canonical)
+    unique = sorted(set(normalized))
+    if not unique:
+        raise HTTPException(status_code=400, detail="symptoms must contain at least one valid symptom string")
+    return unique
+
+
+def normalize_emails(values):
+    if not values:
+        return []
+    result = []
+    for value in values:
+        email = (value or "").strip().lower()
+        if not email:
+            continue
+        if not EMAIL_RE.match(email):
+            raise HTTPException(status_code=400, detail=f"Invalid email format: {value}")
+        result.append(email)
+    return sorted(set(result))
+
+
+class NotificationVisitItem(BaseModel):
+    visit_date: date
+    location: str
+    symptoms: list[str]
+
+
+class NotificationVisitImportRequest(BaseModel):
+    visits: list[NotificationVisitItem]
+    source: str = "temp"
+
+
+class NotificationRunRequest(BaseModel):
+    days: int = 7
+    symptoms: list[str] | None = None
+    source: str = "temp"
+    delete_source_after_run: bool = True
+
+
+class NotificationSendRequest(BaseModel):
+    emails: list[str] | None = None
+    include_email: bool = True
 
 @app.post("/api/users")
 def create_user(user: UserCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_admin)):
@@ -321,10 +406,284 @@ def get_analytics(db: Session = Depends(get_db), current_user: User = Depends(ge
         "sentiment": sentiment_data
     }
 
+
+# --- Notification System ---
+
+@app.post("/api/notification-visits/import")
+def import_notification_visits(
+    payload: NotificationVisitImportRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_doctor),
+):
+    source = (payload.source or "temp").strip().lower()
+    if source not in {"temp", "import", "mock"}:
+        raise HTTPException(status_code=400, detail="source must be one of: temp, import, mock")
+
+    rows = [
+        NotificationVisit(
+            visit_date=item.visit_date,
+            location=normalize_location(item.location),
+            symptoms_json=json.dumps(normalize_symptoms(item.symptoms)),
+            source=source,
+        )
+        for item in payload.visits
+    ]
+
+    if not rows:
+        raise HTTPException(status_code=400, detail="visits payload must contain at least one record")
+
+    db.add_all(rows)
+    db.commit()
+    return {"inserted": len(rows), "source": source}
+
+
+@app.post("/api/notification-visits/import-csv")
+async def import_notification_visits_csv(
+    file: UploadFile = File(...),
+    source: str = Form("temp"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_doctor),
+):
+    parsed_source = (source or "temp").strip().lower()
+    if parsed_source not in {"temp", "import", "mock"}:
+        raise HTTPException(status_code=400, detail="source must be one of: temp, import, mock")
+
+    raw_bytes = await file.read()
+    try:
+        text = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="CSV must be UTF-8 encoded")
+
+    reader = csv.DictReader(io.StringIO(text))
+    expected_columns = {"visit_date", "location", "symptoms"}
+    if not reader.fieldnames or not expected_columns.issubset(set(reader.fieldnames)):
+        raise HTTPException(status_code=400, detail="CSV must include headers: visit_date, location, symptoms")
+
+    rows = []
+    errors = []
+    for index, row in enumerate(reader, start=2):
+        try:
+            parsed_date = datetime.strptime((row.get("visit_date") or "").strip(), "%Y-%m-%d").date()
+            location = normalize_location((row.get("location") or "").strip())
+            symptoms_raw = row.get("symptoms") or ""
+            split_symptoms = [s.strip() for s in re.split(r"[;,|]", symptoms_raw) if s.strip()]
+            symptoms = normalize_symptoms(split_symptoms)
+            rows.append(
+                NotificationVisit(
+                    visit_date=parsed_date,
+                    location=location,
+                    symptoms_json=json.dumps(symptoms),
+                    source=parsed_source,
+                )
+            )
+        except ValueError:
+            errors.append(f"line {index}: visit_date must be YYYY-MM-DD")
+        except HTTPException as exc:
+            errors.append(f"line {index}: {exc.detail}")
+
+    if errors:
+        raise HTTPException(status_code=400, detail={"message": "CSV validation failed", "errors": errors[:20]})
+    if not rows:
+        raise HTTPException(status_code=400, detail="No valid rows found in CSV")
+
+    db.add_all(rows)
+    db.commit()
+    return {"inserted": len(rows), "source": parsed_source}
+
+
+@app.post("/api/notifications/run")
+def run_notifications(
+    payload: NotificationRunRequest | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_doctor),
+):
+    request = payload or NotificationRunRequest()
+    if request.days < 1 or request.days > 365:
+        raise HTTPException(status_code=400, detail="days must be between 1 and 365")
+
+    normalized_symptoms = normalize_symptoms(request.symptoms) if request.symptoms else None
+    source_value = (request.source or "temp").strip().lower()
+    if source_value not in {"temp", "import", "mock"}:
+        raise HTTPException(status_code=400, detail="source must be one of: temp, import, mock")
+
+    result = run_notification_engine(
+        db=db,
+        days=request.days,
+        symptoms=normalized_symptoms,
+        source=source_value,
+        delete_source_after_run=request.delete_source_after_run,
+    )
+    db.commit()
+    return result
+
+
+@app.get("/api/notifications")
+def list_notifications(
+    days: int = 7,
+    severity: str | None = None,
+    location: str | None = None,
+    symptom: str | None = None,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_doctor),
+):
+    days = min(max(days, 1), 365)
+    limit = min(max(limit, 1), 1000)
+    cutoff = datetime.utcnow().date() - timedelta(days=days - 1)
+
+    query = db.query(Notification).filter(Notification.group_date >= cutoff)
+    if severity:
+        severity_value = severity.strip().lower()
+        if severity_value not in {"info", "warning", "critical"}:
+            raise HTTPException(status_code=400, detail="severity must be one of: info, warning, critical")
+        query = query.filter(Notification.severity == severity_value)
+    if location:
+        query = query.filter(Notification.location == normalize_location(location))
+    if symptom:
+        query = query.filter(Notification.symptom == canonicalize_symptom(symptom))
+
+    rows = query.order_by(Notification.created_at.desc(), Notification.id.desc()).limit(limit).all()
+    return [
+        {
+            "id": n.id,
+            "created_at": n.created_at,
+            "group_date": n.group_date,
+            "location": n.location,
+            "symptom": n.symptom,
+            "severity": n.severity,
+            "total_visits": n.total_visits,
+            "symptom_count": n.symptom_count,
+            "rate": n.rate,
+            "threshold_used": n.threshold_used,
+            "message": n.message,
+        }
+        for n in rows
+    ]
+
+
+def _get_notification_or_404(db: Session, notification_id: int):
+    notification = db.query(Notification).filter(Notification.id == notification_id).first()
+    if not notification:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    return notification
+
+
+@app.get("/api/notifications/{notification_id}")
+def get_notification(
+    notification_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_doctor),
+):
+    n = _get_notification_or_404(db, notification_id)
+    return {
+        "id": n.id,
+        "created_at": n.created_at,
+        "group_date": n.group_date,
+        "location": n.location,
+        "symptom": n.symptom,
+        "severity": n.severity,
+        "total_visits": n.total_visits,
+        "symptom_count": n.symptom_count,
+        "rate": n.rate,
+        "threshold_used": n.threshold_used,
+        "message": n.message,
+    }
+
+
+@app.get("/api/notifications/{notification_id}/distribution")
+def get_notification_distribution(
+    notification_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_doctor),
+):
+    n = _get_notification_or_404(db, notification_id)
+    return distribution_for_group(db, n.group_date, n.location)
+
+
+@app.get("/api/notifications/{notification_id}/deliveries")
+def list_notification_deliveries(
+    notification_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_doctor),
+):
+    _get_notification_or_404(db, notification_id)
+    rows = (
+        db.query(NotificationDelivery)
+        .filter(NotificationDelivery.notification_id == notification_id)
+        .order_by(NotificationDelivery.created_at.desc(), NotificationDelivery.id.desc())
+        .all()
+    )
+    return [
+        {
+            "id": row.id,
+            "notification_id": row.notification_id,
+            "channel": row.channel,
+            "recipient": row.recipient,
+            "status": row.status,
+            "provider": row.provider,
+            "error_message": row.error_message,
+            "created_at": row.created_at,
+        }
+        for row in rows
+    ]
+
+
+@app.post("/api/notifications/{notification_id}/send")
+def send_notification(
+    notification_id: int,
+    payload: NotificationSendRequest | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_doctor),
+):
+    n = _get_notification_or_404(db, notification_id)
+    request = payload or NotificationSendRequest()
+
+    recipients = []
+    if request.include_email:
+        recipients.extend(DEFAULT_NOTIFICATION_RECIPIENTS)
+    recipients.extend(normalize_emails(request.emails))
+    recipients = sorted(set(recipients))
+    if not recipients:
+        raise HTTPException(status_code=400, detail="No email recipients provided/configured")
+
+    subject = f"[{n.severity.upper()}] {n.symptom} alert in {n.location}"
+    body = (
+        f"{n.message}\n\n"
+        f"Date: {n.group_date.isoformat()}\n"
+        f"Location: {n.location}\n"
+        f"Symptom: {n.symptom}\n"
+        f"Severity: {n.severity}\n"
+        f"Total visits: {n.total_visits}\n"
+        f"Symptom count: {n.symptom_count}\n"
+        f"Rate: {round(n.rate * 100, 1)}%\n"
+        f"Threshold used: {round(n.threshold_used * 100, 1)}%\n"
+    )
+
+    sent = 0
+    failed = 0
+    for email in recipients:
+        ok, provider, error_message = send_email_notification(email, subject, body)
+        db.add(
+            NotificationDelivery(
+                notification_id=n.id,
+                channel="email",
+                recipient=email,
+                status="sent" if ok else "failed",
+                provider=provider,
+                error_message=error_message or None,
+            )
+        )
+        if ok:
+            sent += 1
+        else:
+            failed += 1
+
+    db.commit()
+    return {"notification_id": n.id, "sent": sent, "failed": failed, "total": len(recipients)}
+
 # --- OCR Feature ---
 
 from database import ScannedNote
-from ocr_service import get_ocr_service
 
 @app.post("/api/scan-note")
 async def scan_note(
@@ -342,7 +701,7 @@ async def scan_note(
         
     try:
         # 2. Run OCR
-        service = get_ocr_service()
+        service = _load_ocr_service()()
         # Run in threadpool to not block async event loop
         import asyncio
         loop = asyncio.get_event_loop()

@@ -6,8 +6,12 @@ __pycache__/
 temp/
 *.db
 .venv/
+.venv
+**/.venv
 *.sqlite
 *.sqlite3
+error_log.txt
+*.log
 
 # Tooling caches
 .pytest_cache/

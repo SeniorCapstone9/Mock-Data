@@ -1,0 +1,26 @@
+{
+  "name": "demostt",
+  "version": "1.0.0",
+  "description": "This is a demonstration of an AI-powered Medical Scribe application. It records audio, transcribes it, diarizes speakers (Doctor/Patient), and uses local LLMs (Ollama) to generate SOAP notes, titles, and clinical analytics.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AbhisarAnand/demoSTT.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/AbhisarAnand/demoSTT/issues"
+  },
+  "homepage": "https://github.com/AbhisarAnand/demoSTT#readme",
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

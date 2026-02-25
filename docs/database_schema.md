@@ -68,6 +68,52 @@ Stores images and OCR text from physical notes.
 | `created_at` | DateTime | Timestamp |
 | `doctor_id` | FK (`users.id`) | Doctor who scanned the note |
 
+### 4. `notification_visits`
+Stores structured visit inputs for the standalone notification subsystem.
+
+| Column | Type | Description |
+| :--- | :--- | :--- |
+| `id` | Integer (PK) | Unique ID |
+| `visit_date` | Date | Visit day (`YYYY-MM-DD`) |
+| `location` | String | State code (`FL`, `CA`) |
+| `symptoms_json` | Text | JSON string array of symptoms |
+| `source` | String | Data source (`temp`, `import`, `mock`) |
+| `created_at` | DateTime | Insert timestamp |
+
+### 5. `notifications`
+Stores generated symptom alerts.
+
+| Column | Type | Description |
+| :--- | :--- | :--- |
+| `id` | Integer (PK) | Unique alert ID |
+| `created_at` | DateTime | Alert upsert timestamp |
+| `group_date` | Date | Grouped date key |
+| `location` | String | State code |
+| `symptom` | String | Canonical symptom name |
+| `severity` | String | `info`, `warning`, `critical` |
+| `total_visits` | Integer | Total visits in the date/location group |
+| `symptom_count` | Integer | Visits containing this symptom |
+| `rate` | Float | `symptom_count / total_visits` |
+| `threshold_used` | Float | Matched threshold value |
+| `message` | Text | Human-readable alert message |
+
+**Constraint**
+* Unique key on (`group_date`, `location`, `symptom`) for upsert behavior.
+
+### 6. `notification_deliveries`
+Stores email/SMS delivery attempts for notification alerts.
+
+| Column | Type | Description |
+| :--- | :--- | :--- |
+| `id` | Integer (PK) | Unique delivery ID |
+| `notification_id` | FK (`notifications.id`) | Notification being delivered |
+| `channel` | String | `email` (SMS reserved for future extension) |
+| `recipient` | String | Email address or E.164 phone number |
+| `status` | String | `sent` or `failed` |
+| `provider` | String | `smtp` (Twilio reserved for future extension) |
+| `error_message` | Text | Provider error (if failed) |
+| `created_at` | DateTime | Attempt timestamp |
+
 ## Relationships
 *   **One-to-Many**: A `User` (Doctor) can have many `Record`s.
 *   **One-to-Many**: A `User` (Patient) can have many `Record`s.

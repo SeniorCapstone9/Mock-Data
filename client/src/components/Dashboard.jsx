@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { Calendar, FileAudio, ChevronRight, LogOut, BarChart2, Activity, Mic, FileText, ExternalLink } from 'lucide-react';
+import { Calendar, FileAudio, ChevronRight, LogOut, BarChart2, Activity, Mic, FileText, ExternalLink, Bell } from 'lucide-react';
 import Recorder from './Recorder';
 import NoteScanner from './NoteScanner';
 import { API_URL } from '../config';
@@ -139,6 +139,9 @@ const Dashboard = () => {
                 </div>
 
                 <div style={{ display: 'flex', gap: '1rem' }}>
+                    <button className="btn" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }} onClick={() => navigate('/notifications')}>
+                        <Bell size={20} />
+                    </button>
                     <button className="btn" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }} onClick={() => navigate('/analytics')}>
                         <BarChart2 size={20} />
                     </button>

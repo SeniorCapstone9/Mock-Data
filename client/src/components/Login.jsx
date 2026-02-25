@@ -9,20 +9,25 @@ const Login = () => {
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
+    const [loading, setLoading] = useState(false);
     const navigate = useNavigate();
 
     const handleLogin = async (e) => {
         e.preventDefault();
-        setError(''); // Clear previous error
+        setError('');
+        setLoading(true);
 
         try {
-            // Use FormData from the form element directly to handle autofill correctly
-            const formData = new FormData(e.currentTarget);
+            const payload = new URLSearchParams();
+            payload.append('username', username.trim());
+            payload.append('password', password);
 
-            // Log what we are sending for debugging (safe to remove later)
-            console.log("Logging in with:", Object.fromEntries(formData));
-
-            const response = await axios.post(`${API_URL}/token`, formData);
+            const response = await axios.post(`${API_URL}/token`, payload, {
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                timeout: 10000,
+            });
             localStorage.setItem('token', response.data.access_token);
             localStorage.setItem('role', response.data.role);
 
@@ -31,7 +36,17 @@ const Login = () => {
             else navigate('/dashboard');
         } catch (err) {
             console.error("Login failed:", err);
-            setError('Invalid credentials');
+            if (err.code === 'ECONNABORTED') {
+                setError('Login timed out. Backend may be stuck or not reachable.');
+            } else if (!err.response) {
+                setError('Cannot reach server. Make sure the backend is running and API URL is correct.');
+            } else if (err.response.status === 401) {
+                setError('Invalid credentials');
+            } else {
+                setError(err.response?.data?.detail || 'Login failed');
+            }
+        } finally {
+            setLoading(false);
         }
     };
 
@@ -72,8 +87,8 @@ const Login = () => {
 
                     {error && <p style={{ color: 'var(--error)', marginBottom: '1rem' }}>{error}</p>}
 
-                    <button type="submit" className="btn btn-primary" style={{ width: '100%' }}>
-                        Sign In
+                    <button type="submit" className="btn btn-primary" style={{ width: '100%' }} disabled={loading}>
+                        {loading ? 'Signing In...' : 'Sign In'}
                     </button>
                 </form>
             </div>

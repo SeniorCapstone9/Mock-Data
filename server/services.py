@@ -3,8 +3,9 @@ import json
 import torch
 from faster_whisper import WhisperModel
 from pyannote.audio import Pipeline
-import ollama
 from dotenv import load_dotenv
+import ollama
+
 
 load_dotenv()
 
@@ -15,21 +16,37 @@ HF_TOKEN = os.getenv("HF_TOKEN")
 # On Mac M-series, 'cpu' with 'int8' is very fast, or 'cuda' is not available.
 # faster-whisper uses CTranslate2 which supports CoreML or CPU.
 # For M4 Pro, 'cpu' with 'float16' or 'int8' is good.
-whisper_model = WhisperModel("large-v3", device="cpu", compute_type="int8")
+whisper_device = "cuda" if torch.cuda.is_available() else "cpu"
+
+whisper_model = WhisperModel(
+    "large-v3",
+    device=whisper_device,
+    compute_type="float16" if whisper_device == "cuda" else "int8"
+)
+
+print(f"Whisper loaded on {whisper_device}")
 
 # Pyannote Pipeline
+# Pyannote Pipeline (RunPod: use CUDA if available)
+diarization_pipeline = None
 try:
+    if not HF_TOKEN:
+        raise RuntimeError("HF_TOKEN is missing. Put it in server/.env and reload the terminal.")
+
     from pyannote.audio.core.task import Specifications, Problem, Resolution
     torch.serialization.add_safe_globals([torch.torch_version.TorchVersion, Specifications, Problem, Resolution])
+
     diarization_pipeline = Pipeline.from_pretrained(
         "pyannote/speaker-diarization-3.1",
-        use_auth_token=HF_TOKEN
+        token=HF_TOKEN
     )
-    # Move to MPS if available for PyTorch
-    if torch.backends.mps.is_available():
-        diarization_pipeline.to(torch.device("mps"))
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    diarization_pipeline.to(torch.device(device))
+    print(f"Pyannote diarization loaded on {device}")
+
 except Exception as e:
-    print(f"Warning: Could not load Pyannote pipeline. Diarization will be disabled. Error: {e}")
+    print(f"Warning: Could not load Pyannote pipeline. Diarization disabled. Error: {e}")
     diarization_pipeline = None
 
 async def transcribe_audio(file_path: str):
@@ -51,19 +68,32 @@ async def transcribe_audio(file_path: str):
         # 2. Diarize with Pyannote (if available)
         diarization_result = []
         if diarization_pipeline:
-            # Pyannote expects a file path
-            diarization = diarization_pipeline(file_path)
-            
-            # Match diarization with transcript segments (simple alignment)
-            # This is a naive alignment. For production, use better alignment or WhisperX.
-            # Here we just list speakers and their time ranges.
-            for turn, _, speaker in diarization.itertracks(yield_label=True):
-                diarization_result.append({
-                    "start": turn.start,
-                    "end": turn.end,
-                    "speaker": speaker
-                })
-        
+            diarization_output = diarization_pipeline(file_path)
+
+            # pyannote 3.1 often returns DiarizeOutput (dict-like)
+            if hasattr(diarization_output, "itertracks"):
+                diarization_annotation = diarization_output
+
+            elif hasattr(diarization_output, "diarization"):
+                diarization_annotation = diarization_output.diarization
+
+            else:
+                # some versions expose dict-like access
+                try:
+                    diarization_annotation = diarization_output["diarization"]
+                except Exception:
+                    diarization_annotation = None
+
+            if diarization_annotation is None or not hasattr(diarization_annotation, "itertracks"):
+                print(f"Warning: diarization output not understood: {type(diarization_output)}. Continuing without diarization.")
+            else:
+                for turn, _, speaker in diarization_annotation.itertracks(yield_label=True):
+                    diarization_result.append({
+                        "start": float(turn.start),
+                        "end": float(turn.end),
+                        "speaker": str(speaker)
+                    })
+
         # Merge Transcript and Diarization
         # Naive merge: Assign speaker to segment if overlaps significantly
         final_transcript = []
@@ -96,7 +126,7 @@ async def transcribe_audio(file_path: str):
         word_count = len(full_text.split())
         
         # Calculate Average Confidence
-        total_confidence = sum([s.avg_logprob for s in segments]) # This is logprob, need to convert or just use as score. 
+        # total_confidence = sum([s.avg_logprob for s in segments]) # This is logprob, need to convert or just use as score. 
         # Actually faster-whisper segment has 'avg_logprob'. Probability is exp(avg_logprob).
         # Let's approximate confidence.
         avg_confidence = 0.0
@@ -104,7 +134,7 @@ async def transcribe_audio(file_path: str):
             import math
             avg_confidence = sum([math.exp(s['avg_logprob']) for s in transcript_segments]) / len(transcript_segments)
 
-        speaker_count = len(set([s['speaker'] for s in final_transcript]))
+        speaker_count = len({s["speaker"] for s in final_transcript if s["speaker"] != "Unknown"})
 
         return {
             "json": json.dumps(final_transcript, indent=2),
@@ -118,7 +148,9 @@ async def transcribe_audio(file_path: str):
         print(f"Transcription Error: {e}")
         raise e
 
-def process_transcript_with_ai(transcript_json: str, existing_tags: list = []):
+def process_transcript_with_ai(transcript_json: str, existing_tags=None):
+    if existing_tags is None:
+        existing_tags = []
     try:
         data = json.loads(transcript_json)
         full_text = ""

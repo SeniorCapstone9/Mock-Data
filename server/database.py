@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Float, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Date, Float, ForeignKey, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
@@ -61,6 +61,49 @@ class ScannedNote(Base):
     doctor = relationship("User", back_populates="scanned_notes")
 
 User.scanned_notes = relationship("ScannedNote", back_populates="doctor")
+
+
+class NotificationVisit(Base):
+    __tablename__ = "notification_visits"
+
+    id = Column(Integer, primary_key=True, index=True)
+    visit_date = Column(Date, index=True, nullable=False)
+    location = Column(String, index=True, nullable=False)
+    symptoms_json = Column(Text, nullable=False)  # JSON string array
+    source = Column(String, default="import")  # import | mock
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+    __table_args__ = (
+        UniqueConstraint("group_date", "location", "symptom", name="uq_notification_group"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    group_date = Column(Date, index=True, nullable=False)
+    location = Column(String, index=True, nullable=False)
+    symptom = Column(String, index=True, nullable=False)
+    severity = Column(String, nullable=False)  # info | warning | critical
+    total_visits = Column(Integer, nullable=False)
+    symptom_count = Column(Integer, nullable=False)
+    rate = Column(Float, nullable=False)  # 0..1
+    threshold_used = Column(Float, nullable=False)
+    message = Column(Text, nullable=False)
+
+
+class NotificationDelivery(Base):
+    __tablename__ = "notification_deliveries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    notification_id = Column(Integer, ForeignKey("notifications.id"), nullable=False, index=True)
+    channel = Column(String, nullable=False)  # email | sms
+    recipient = Column(String, nullable=False)
+    status = Column(String, nullable=False)  # sent | failed
+    provider = Column(String, nullable=False)  # smtp | twilio
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 def init_db():
     Base.metadata.create_all(bind=engine)
