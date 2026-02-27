@@ -22,6 +22,12 @@ class Record(Base):
     soap_summary = Column(Text, nullable=True)
     status = Column(String, default="processing") # processing, completed, failed
     created_at = Column(DateTime, default=datetime.utcnow)
+    user_id = Column(Integer, ForeignKey("users.id"))
+
+    #medical stats
+    hba1c = Column(Float, nullable=True) # Add this
+    bmi = Column(Float, nullable=True)   # Add this
+    glucose_level = Column(Float, nullable=True) # Add this
     
     # Analytics
     duration = Column(Float, default=0.0)
@@ -91,6 +97,7 @@ class Notification(Base):
     rate = Column(Float, nullable=False)  # 0..1
     threshold_used = Column(Float, nullable=False)
     message = Column(Text, nullable=False)
+    alert_type = Column(String)
 
 
 class NotificationDelivery(Base):

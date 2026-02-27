@@ -6,10 +6,11 @@ from typing import Dict, List, Optional, Set, Tuple
 from sqlalchemy.orm import Session
 
 from database import Notification, NotificationVisit
+import ollama
 
-INFO_THRESHOLD = 0.15
-WARNING_THRESHOLD = 0.30
-CRITICAL_THRESHOLD = 0.50
+INFO_THRESHOLD = 0.02
+WARNING_THRESHOLD = 0.05
+CRITICAL_THRESHOLD = 0.10
 
 # Deterministic normalization for common symptom aliases.
 SYMPTOM_SYNONYMS = {
@@ -94,6 +95,39 @@ def _group_visits(visits: List[NotificationVisit]) -> Dict[Tuple[date, str], Dic
     return grouped
 
 
+def distribution_for_group(db: Session, group_date: date, location: str):
+    """
+    Returns the distribution of symptoms for a specific location on a specific day.
+    Used by the frontend to display the breakdown of outbreaks.
+    """
+    visits = db.query(NotificationVisit).filter(
+        NotificationVisit.visit_date == group_date,
+        NotificationVisit.location == location
+    ).all()
+
+    total_visits = len(visits)
+    symptom_counts = {}
+    
+    for v in visits:
+        if v.symptoms_json:
+            try:
+                symps = json.loads(v.symptoms_json)
+                for s in symps:
+                    symptom_counts[s] = symptom_counts.get(s, 0) + 1
+            except json.JSONDecodeError:
+                continue
+
+    distribution = {s: count / total_visits for s, count in symptom_counts.items()} if total_visits > 0 else {}
+
+    return {
+        "group_date": group_date,
+        "location": location,
+        "total_visits": total_visits,
+        "symptom_counts": symptom_counts,
+        "distribution": distribution
+    }
+
+
 def run_notification_engine(
     db: Session,
     days: int = 7,
@@ -101,20 +135,20 @@ def run_notification_engine(
     source: Optional[str] = None,
     delete_source_after_run: bool = False,
 ) -> Dict[str, int]:
-    today = datetime.utcnow().date()
+    import ollama
+    import json
+    
+    today = datetime.now().date()
     cutoff = today - timedelta(days=max(days - 1, 0))
 
+    # 1. Fetch the raw visit data
     visit_query = db.query(NotificationVisit).filter(NotificationVisit.visit_date >= cutoff)
     if source:
         visit_query = visit_query.filter(NotificationVisit.source == source)
     visits = visit_query.all()
-    visit_ids = [visit.id for visit in visits]
-
+    
+    # 2. Group visits by Date and Location
     grouped = _group_visits(visits)
-    filter_set: Optional[Set[str]] = None
-    if symptoms:
-        filter_set = {canonicalize_symptom(s) for s in symptoms if canonicalize_symptom(s)}
-
     alerts_upserted = 0
 
     for (group_date, location), payload in grouped.items():
@@ -122,102 +156,164 @@ def run_notification_engine(
         if total_visits <= 0:
             continue
 
-        symptom_counts: Counter = payload["symptom_counts"]
-        for symptom, symptom_count in symptom_counts.items():
-            if filter_set and symptom not in filter_set:
-                continue
+        # Format the symptom counts for the AI to read
+        symptom_summary = ", ".join([f"{s}: {c}" for s, c in payload["symptom_counts"].items()])
 
-            rate = symptom_count / total_visits
-            severity, threshold_used = severity_for_rate(rate)
-            if not severity or threshold_used is None:
-                continue
+        # THE EPIDEMIOLOGIST PROMPT
+        prompt = f"""
+        You are an AI Epidemiologist. Analyze the following symptom data for {location} on {group_date}.
+        Total Patient Visits: {total_visits}
+        Symptom Breakdown: {symptom_summary}
+        
+        Evaluate if these symptoms represent a significant public health outbreak (e.g., Flu, COVID-19, Food Poisoning).
+        Return ONLY valid JSON in this format:
+        {{
+            "outbreak_detected": true/false,
+            "diagnosis": "Name of suspected outbreak",
+            "severity": "critical", "warning", or "info",
+            "justification": "One sentence explaining why."
+        }}
+        """
 
-            message = build_message(
-                symptom=symptom,
-                location=location,
-                group_date=group_date,
-                count=symptom_count,
-                total=total_visits,
-                rate=rate,
-                severity=severity,
-            )
+        try:
+            response = ollama.chat(model='llama3', messages=[{'role': 'user', 'content': prompt}], format='json')
+            ai_eval = json.loads(response['message']['content'])
 
-            existing = (
-                db.query(Notification)
-                .filter(Notification.group_date == group_date)
-                .filter(Notification.location == location)
-                .filter(Notification.symptom == symptom)
-                .first()
-            )
+            if ai_eval.get("outbreak_detected"):
+                diagnosis = ai_eval.get("diagnosis", "Unknown Outbreak")
+                severity = ai_eval.get("severity", "info")
+                justification = ai_eval.get("justification", "")
 
-            if existing:
-                existing.created_at = datetime.utcnow()
-                existing.severity = severity
-                existing.total_visits = total_visits
-                existing.symptom_count = symptom_count
-                existing.rate = rate
-                existing.threshold_used = threshold_used
-                existing.message = message
-            else:
-                db.add(
-                    Notification(
+                # Update or Create the Notification
+                existing = (
+                    db.query(Notification)
+                    .filter(Notification.group_date == group_date)
+                    .filter(Notification.location == location)
+                    .filter(Notification.symptom == diagnosis)
+                    .first()
+                )
+
+                msg = f"AI OUTBREAK ALERT: {diagnosis} detected in {location}. {justification}"
+                
+                if existing:
+                    existing.severity = severity
+                    existing.message = msg
+                    existing.created_at = datetime.now()
+                else:
+                    db.add(Notification(
                         group_date=group_date,
                         location=location,
-                        symptom=symptom,
+                        symptom=diagnosis,
                         severity=severity,
                         total_visits=total_visits,
-                        symptom_count=symptom_count,
-                        rate=rate,
-                        threshold_used=threshold_used,
-                        message=message,
-                    )
-                )
-            alerts_upserted += 1
+                        symptom_count=0, # Aggregated, so individual count is N/A
+                        rate=0.0,
+                        threshold_used=0.0,
+                        message=msg
+                    ))
+                alerts_upserted += 1
 
-    deleted_source_visits = 0
-    if delete_source_after_run and visit_ids:
-        deleted_source_visits = (
-            db.query(NotificationVisit)
-            .filter(NotificationVisit.id.in_(visit_ids))
-            .delete(synchronize_session=False)
-        )
+        except Exception as e:
+            print(f"AI Public Health Analysis failed for {location}: {e}")
 
     return {
         "groups_processed": len(grouped),
         "source_visits": len(visits),
         "alerts_upserted": alerts_upserted,
-        "deleted_source_visits": deleted_source_visits,
     }
 
 
-def distribution_for_group(db: Session, group_date: date, location: str) -> Dict[str, object]:
-    visits = (
-        db.query(NotificationVisit)
-        .filter(NotificationVisit.visit_date == group_date)
-        .filter(NotificationVisit.location == location)
-        .all()
-    )
+if __name__ == "__main__":
+    from database import SessionLocal, Record
+    import ollama  
+    import json
+    
+    db = SessionLocal()
+    print("🚀 Starting AI-Driven Integrated Notification Engine...")
+    
+    try:
+        # --- PART 1: Contagious Spike Detection (Unchanged)
+        print("\nChecking for Contagious Spikes (Influenza)...")
+        results = run_notification_engine(db, days=2)
+        print(f"📊 Spike Alerts Created: {results['alerts_upserted']}")
 
-    total_visits = len(visits)
-    symptom_counts: Counter = Counter()
-    for visit in visits:
-        for symptom in symptoms_from_json(visit.symptoms_json):
-            symptom_counts[symptom] += 1
+        # --- PART 2: AI Chronic Disease Detection 
+        print("\n🧠 AI analyzing Patient Transcripts for Chronic Diseases...")
+        
+        # Grab records that actually have a transcript
+        recent_records = db.query(Record).filter(Record.full_transcript.isnot(None)).all()
 
-    distribution = []
-    for symptom, count in symptom_counts.most_common():
-        rate = (count / total_visits) if total_visits else 0.0
-        distribution.append(
-            {
-                "symptom": symptom,
-                "count": count,
-                "rate": round(rate, 4),
-            }
-        )
+        chronic_count = 0
+        for rec in recent_records:
+            r_id = rec.id 
+            p_id = rec.patient_id 
+            
+            # The STRICT Clinical Prompt with Patient Vitals
+            prompt = f"""
+            You are a strict medical AI. Analyze this patient's clinical data and transcript for SPECIFIC chronic diseases (e.g., Type 2 Diabetes, Obesity, Hypertension).
+            
+            Clinical Vitals:
+            - HbA1c: {getattr(rec, 'hba1c', 'N/A')}
+            - BMI: {getattr(rec, 'bmi', 'N/A')}
+            
+            Transcript: {rec.full_transcript}
+            
+            Do NOT return vague terms like "Chronic Disease". If an exact medical condition is not explicitly supported by the vitals or transcript, you MUST return {{"detected": false}}.
+            Return ONLY valid JSON in this exact format:
+            {{
+                "detected": true,
+                "condition": "Exact Diagnosis Name Only",
+                "severity": "High" or "Medium",
+                "justification": "Short reason why based on the vitals and transcript"
+            }}
+            """
+            
+            try:
+                # Ask Ollama to evaluate the transcript
+                response = ollama.chat(model='llama3', messages=[{'role': 'user', 'content': prompt}], format='json')
+                ai_eval = json.loads(response['message']['content'])
+                
+                # If the AI detects a risk, create the alert!
+                if ai_eval.get("detected"):
+                    condition = ai_eval.get("condition", "Chronic Condition")
+                    severity = ai_eval.get("severity", "Medium")
+                    justification = ai_eval.get("justification", "AI detected risk in transcript.")
+                    
+                    patient_symptom = f"{condition} (Patient ID: {p_id})" 
+                    
+                    # Check for duplicates so we don't spam the dashboard
+                    existing_alert = db.query(Notification).filter(
+                        Notification.symptom == patient_symptom
+                    ).first()
 
-    return {
-        "group_date": group_date.isoformat(),
-        "location": location,
-        "total_visits": total_visits,
-        "distribution": distribution,
-    }
+                    if not existing_alert:
+                        msg = f"CHRONIC ALERT: {condition} risk detected for Patient ID: {p_id}. Justification: {justification}"
+                        
+                        new_alert = Notification(
+                            group_date=datetime.now().date(),
+                            location="FL",       
+                            symptom=patient_symptom,
+                            severity="warning",   
+                            alert_type=severity, 
+                            message=msg,
+                            rate=1.0,            
+                            total_visits=1,
+                            symptom_count=1,
+                            threshold_used=0.0
+                        )
+                        db.add(new_alert)
+                        chronic_count += 1
+                        print(f"   -> ⚠️ AI Flagged Patient {p_id} for {condition} ({severity} Severity)")
+            
+            except Exception as e:
+                print(f"   -> ❌ AI processing failed for Record {r_id}: {e}")
+        
+        db.commit()
+        print(f"✅ AI Chronic Disease Alerts Created: {chronic_count}")
+        print("\n--- Execution Complete ---")
+
+    except Exception as e:
+        print(f"❌ Error running engine: {e}")
+        db.rollback()
+    finally:
+        db.close()
