@@ -74,18 +74,27 @@ const RecordSession = () => {
 const SessionDetails = () => {
   const { id } = useParams();
   const navigate = useNavigate();
-  const role = localStorage.getItem('role');
+  
+  // 1. Crack open the token to get the TRUE role
+  let role = '';
+  const token = localStorage.getItem('token');
+  if (token) {
+    try {
+      const payload = JSON.parse(atob(token.split('.')[1]));
+      role = (payload.role || '').toLowerCase();
+    } catch (e) {
+      console.error("Could not decode token", e);
+    }
+  }
 
   // Add Authorization header
   useEffect(() => {
-    const token = localStorage.getItem('token');
     if (token) {
       axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
     }
-  }, []);
+  }, [token]);
 
   const handleDelete = async () => {
-    const token = localStorage.getItem('token');
     if (!token) {
       navigate('/login');
       return;
@@ -98,7 +107,12 @@ const SessionDetails = () => {
       await axios.delete(`${API_URL}/api/records/${id}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
-      navigate('/dashboard');
+      
+      // 2. SMART REDIRECT AFTER DELETE
+      if (role === 'admin') navigate('/admin');
+      else if (role === 'patient') navigate('/portal');
+      else navigate('/dashboard');
+
     } catch (err) {
       console.error(err);
       alert('Failed to delete session.');
@@ -108,9 +122,22 @@ const SessionDetails = () => {
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginBottom: '1rem' }}>
-        <button className="btn" onClick={() => navigate('/dashboard')} style={{ paddingLeft: 0 }}>
-          <ArrowLeft size={20} /> Back to Dashboard
+        
+        {/* 3. --- THE NEW SMART BACK BUTTON --- */}
+        <button 
+          className="btn" 
+          onClick={() => {
+            if (role === 'admin') navigate('/admin');
+            else if (role === 'patient') navigate('/portal');
+            else navigate('/dashboard');
+          }} 
+          style={{ paddingLeft: 0 }}
+        >
+          <ArrowLeft size={20} /> 
+          {role === 'admin' ? 'Back to Admin' : (role === 'patient' ? 'Back to Portal' : 'Back to Dashboard')}
         </button>
+        {/* --------------------------------- */}
+
         {role !== 'patient' && (
           <button className="btn" onClick={handleDelete} style={{ background: 'var(--error)', color: 'white', border: 'none' }}>
             Delete
@@ -174,10 +201,22 @@ const NoteDetailsPage = () => {
 const Header = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const isLoggedIn = !!localStorage.getItem('token');
+  const token = localStorage.getItem('token');
+  const isLoggedIn = !!token;
+  
+  // 1. Define the role by cracking open the token
+  let role = '';
+  if (token) {
+    try {
+      const payload = JSON.parse(atob(token.split('.')[1]));
+      role = (payload.role || '').toLowerCase();
+    } catch (e) {
+      console.error("Could not decode token", e);
+    }
+  }
 
-  // Don't show header button on login page
-  const showButton = location.pathname !== '/login';
+  // Hide the header button on the login page OR if the user is a patient
+  const showButton = location.pathname !== '/login' && role !== 'patient';
 
   return (
     <header className="header">
@@ -185,10 +224,12 @@ const Header = () => {
         <Stethoscope size={32} />
         <span>MediScribe AI</span>
       </div>
+      
       {showButton && (
         <button
           className="btn btn-primary"
-          onClick={() => navigate(isLoggedIn ? '/dashboard' : '/login')}
+          // Route Admins to /admin, Doctors to /dashboard
+          onClick={() => navigate(isLoggedIn ? (role === 'admin' ? '/admin' : '/dashboard') : '/login')}
           style={{
             padding: '0.5rem 1rem',
             fontSize: '0.9rem',
@@ -197,7 +238,14 @@ const Header = () => {
             gap: '0.5rem'
           }}
         >
-          {isLoggedIn ? <><LayoutDashboard size={18} /> Dashboard</> : <><LogIn size={18} /> Login</>}
+          {isLoggedIn ? (
+            <>
+              <LayoutDashboard size={18} /> 
+              {role === 'admin' ? 'Admin Portal' : 'Dashboard'}
+            </>
+          ) : (
+            <><LogIn size={18} /> Login</>
+          )}
         </button>
       )}
     </header>

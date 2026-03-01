@@ -30,11 +30,19 @@ const Dashboard = () => {
             try {
                 const payload = JSON.parse(atob(token.split('.')[1]));
                 setUser({ username: payload.sub, role: payload.role });
+
+                // 🛑 RBAC GUARD: Kick patients out of the doctor dashboard!
+                if (payload.role === 'patient') {
+                    navigate('/portal'); // Make sure this matches your actual route in App.jsx
+                    return; // Stop running the rest of the dashboard code
+                }
+
             } catch (e) {
                 console.error("Invalid token", e);
             }
         } else {
             navigate('/login');
+            return; // Stop execution if no token
         }
 
         fetchRecords();
